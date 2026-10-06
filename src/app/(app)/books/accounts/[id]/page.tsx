@@ -4,7 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
-import { formatPence, toPence } from "@/lib/money";
+import { formatPence } from "@/lib/money";
 import { formatDate } from "@/lib/utils";
 import { Topbar } from "@/components/layout/topbar";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,29 +12,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ledgerDateKey, toLedgerDate } from "@/lib/accounting/dates";
 import { ACCOUNT_TYPE_LABEL, NORMAL_BALANCE } from "@/lib/accounting/chart";
+import { loadAccountLedger } from "@/lib/accounting/account-ledger-query";
 
 interface PageProps {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ from?: string; to?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; page?: string }>;
 }
 
-const ROW_LIMIT = 1000;
-
-/** Pairs each movement with the account balance after it, starting from `opening`. */
-function withRunningBalance<T extends { debit: { toFixed(): string }; credit: { toFixed(): string } }>(
-  lines: T[],
-  opening: number
-) {
-  const rows: { line: T; debit: number; credit: number; balance: number }[] = [];
-  let balance = opening;
-  for (const line of lines) {
-    const debit = toPence(line.debit);
-    const credit = toPence(line.credit);
-    balance += debit - credit;
-    rows.push({ line, debit, credit, balance });
-  }
-  return { rows, closing: balance };
-}
+const PAGE_SIZE = 200;
 
 function parseDate(value?: string): Date | null {
   if (!value) return null;
@@ -58,26 +43,24 @@ export default async function AccountLedgerPage({ params, searchParams }: PagePr
   const account = await prisma.ledgerAccount.findUnique({ where: { id } });
   if (!account) notFound();
 
-  const [opening, lines] = await Promise.all([
-    from
-      ? prisma.journalLine.aggregate({
-          where: { accountId: id, entry: { status: "POSTED", date: { lt: from } } },
-          _sum: { debit: true, credit: true },
-        })
-      : null,
-    prisma.journalLine.findMany({
-      where: {
-        accountId: id,
-        entry: {
-          status: "POSTED",
-          ...(from || to ? { date: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
-        },
-      },
-      include: { entry: { select: { id: true, number: true, date: true, memo: true } } },
-      orderBy: [{ entry: { date: "asc" } }, { entry: { number: "asc" } }, { lineNumber: "asc" }],
-      take: ROW_LIMIT,
-    }),
-  ]);
+  const page = Math.max(1, parseInt(query.page ?? "1", 10) || 1);
+  const ledger = await loadAccountLedger(prisma, {
+    accountId: id,
+    from,
+    to,
+    offset: (page - 1) * PAGE_SIZE,
+    limit: PAGE_SIZE,
+  });
+  const pageHref = (n: number) => {
+    const qs = new URLSearchParams();
+    if (query.from) qs.set("from", query.from);
+    if (query.to) qs.set("to", query.to);
+    if (n > 1) qs.set("page", String(n));
+    const text = qs.toString();
+    return `/books/accounts/${id}${text ? `?${text}` : ""}`;
+  };
+  const firstShown = ledger.rows.length ? ledger.offset + 1 : 0;
+  const lastShown = ledger.offset + ledger.rows.length;
 
   // Balances are shown on the account's natural side, so a bank account in
   // funds and a loan that is owed both read as positive numbers.
@@ -86,11 +69,6 @@ export default async function AccountLedgerPage({ params, searchParams }: PagePr
     const natural = pence * sign;
     return natural < 0 ? `(${formatPence(-natural)})` : formatPence(natural);
   };
-
-  const openingBalance = opening
-    ? toPence(opening._sum.debit ?? 0) - toPence(opening._sum.credit ?? 0)
-    : 0;
-  const { rows, closing: running } = withRunningBalance(lines, openingBalance);
 
   return (
     <>
@@ -144,25 +122,27 @@ export default async function AccountLedgerPage({ params, searchParams }: PagePr
               <tbody className="divide-y divide-border">
                 <tr className="bg-muted/20">
                   <td className="px-5 py-3 text-muted-foreground" colSpan={5}>
-                    Opening balance{from ? ` at ${formatDate(ledgerDateKey(from))}` : ""}
+                    {ledger.offset > 0
+                      ? "Balance brought forward"
+                      : `Opening balance${from ? ` at ${formatDate(ledgerDateKey(from))}` : ""}`}
                   </td>
-                  <td className="px-5 py-3 text-right tabular-nums font-medium">{show(openingBalance)}</td>
+                  <td className="px-5 py-3 text-right tabular-nums font-medium">{show(ledger.pageOpeningBalance)}</td>
                 </tr>
-                {rows.map(({ line, debit, credit, balance }) => (
-                  <tr key={line.id} className="hover:bg-muted/20">
-                    <td className="px-5 py-3 whitespace-nowrap">{formatDate(ledgerDateKey(line.entry.date))}</td>
+                {ledger.rows.map((row) => (
+                  <tr key={row.lineId} className="hover:bg-muted/20">
+                    <td className="px-5 py-3 whitespace-nowrap">{formatDate(row.date)}</td>
                     <td className="px-3 py-3 tabular-nums">
-                      <Link href={`/books/journals/${line.entry.id}`} className="text-primary hover:underline">
-                        {line.entry.number}
+                      <Link href={`/books/journals/${row.entryId}`} className="text-primary hover:underline">
+                        {row.number}
                       </Link>
                     </td>
                     <td className="px-3 py-3">
-                      {line.entry.memo}
-                      {line.description && <span className="text-muted-foreground"> · {line.description}</span>}
+                      {row.memo}
+                      {row.description && <span className="text-muted-foreground"> · {row.description}</span>}
                     </td>
-                    <td className="px-3 py-3 text-right tabular-nums">{debit ? formatPence(debit) : ""}</td>
-                    <td className="px-3 py-3 text-right tabular-nums">{credit ? formatPence(credit) : ""}</td>
-                    <td className="px-5 py-3 text-right tabular-nums">{show(balance)}</td>
+                    <td className="px-3 py-3 text-right tabular-nums">{row.debit ? formatPence(row.debit) : ""}</td>
+                    <td className="px-3 py-3 text-right tabular-nums">{row.credit ? formatPence(row.credit) : ""}</td>
+                    <td className="px-5 py-3 text-right tabular-nums">{show(row.balance)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -171,14 +151,28 @@ export default async function AccountLedgerPage({ params, searchParams }: PagePr
                   <td className="px-5 py-3" colSpan={5}>
                     Closing balance
                   </td>
-                  <td className="px-5 py-3 text-right tabular-nums">{show(running)}</td>
+                  <td className="px-5 py-3 text-right tabular-nums">{show(ledger.closingBalance)}</td>
                 </tr>
               </tfoot>
             </table>
-            {rows.length === ROW_LIMIT && (
-              <p className="px-5 py-3 text-xs text-amber-700">
-                Showing the first {ROW_LIMIT} movements — narrow the dates to see the rest.
-              </p>
+            {ledger.total > PAGE_SIZE && (
+              <div className="flex items-center justify-between px-5 py-3 text-xs text-muted-foreground">
+                <span>
+                  Showing {firstShown}–{lastShown} of {ledger.total} movements. The closing balance covers all of them.
+                </span>
+                <span className="flex gap-3">
+                  {page > 1 && (
+                    <Link href={pageHref(page - 1)} className="text-primary hover:underline">
+                      Previous
+                    </Link>
+                  )}
+                  {ledger.truncated && (
+                    <Link href={pageHref(page + 1)} className="text-primary hover:underline">
+                      Next
+                    </Link>
+                  )}
+                </span>
+              </div>
             )}
           </CardContent>
         </Card>

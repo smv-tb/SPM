@@ -2,16 +2,20 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { withErrorHandler } from "@/lib/api-errors";
-import { toPence } from "@/lib/money";
 import { MAX_PAGE_LIMIT } from "@/lib/constants";
 import { booksError, requireBooks } from "@/lib/books-api";
 import { ledgerDateKey, toLedgerDate } from "@/lib/accounting/dates";
 import { NORMAL_BALANCE } from "@/lib/accounting/chart";
+import { loadAccountLedger } from "@/lib/accounting/account-ledger-query";
 
 /**
  * Every posted movement on one account, with an opening balance and a running
  * balance — the report an accountant opens to ask "why is this account this
  * number?".
+ *
+ * Rows are paged (`limit`, `offset`) but `openingBalance` and `closingBalance`
+ * always describe the whole window; `pageOpeningBalance` is where the first
+ * row of the page starts, so each row's `balance` is right for its position.
  */
 export const GET = withErrorHandler(async (req: NextRequest) => {
   const guard = await requireBooks(req, "books:view");
@@ -29,51 +33,10 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
 
     const from = params.get("from") ? toLedgerDate(params.get("from")!) : null;
     const to = params.get("to") ? toLedgerDate(params.get("to")!) : null;
-    const take = Math.min(Number(params.get("limit")) || MAX_PAGE_LIMIT, 1000);
+    const limit = Math.min(Math.max(Math.floor(Number(params.get("limit"))) || MAX_PAGE_LIMIT, 1), 1000);
+    const offset = Math.max(Math.floor(Number(params.get("offset"))) || 0, 0);
 
-    // Everything posted before the window is the opening balance.
-    const opening = from
-      ? await prisma.journalLine.aggregate({
-          where: { accountId, entry: { status: "POSTED", date: { lt: from } } },
-          _sum: { debit: true, credit: true },
-        })
-      : null;
-
-    const lines = await prisma.journalLine.findMany({
-      where: {
-        accountId,
-        entry: {
-          status: "POSTED",
-          ...(from || to ? { date: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
-        },
-      },
-      include: { entry: { select: { id: true, number: true, date: true, memo: true, reference: true } } },
-      orderBy: [{ entry: { date: "asc" } }, { entry: { number: "asc" } }, { lineNumber: "asc" }],
-      take,
-    });
-
-    const openingBalance = opening
-      ? toPence(opening._sum.debit ?? 0) - toPence(opening._sum.credit ?? 0)
-      : 0;
-
-    let running = openingBalance;
-    const rows = lines.map((line) => {
-      const debit = toPence(line.debit);
-      const credit = toPence(line.credit);
-      running += debit - credit;
-      return {
-        lineId: line.id,
-        entryId: line.entry.id,
-        number: line.entry.number,
-        date: ledgerDateKey(line.entry.date),
-        memo: line.entry.memo,
-        reference: line.entry.reference,
-        description: line.description,
-        debit,
-        credit,
-        balance: running,
-      };
-    });
+    const page = await loadAccountLedger(prisma, { accountId, from, to, offset, limit });
 
     return NextResponse.json({
       account: {
@@ -85,10 +48,15 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
       },
       from: from ? ledgerDateKey(from) : null,
       to: to ? ledgerDateKey(to) : null,
-      openingBalance,
-      closingBalance: running,
-      rows,
-      truncated: rows.length === take,
+      openingBalance: page.openingBalance,
+      closingBalance: page.closingBalance,
+      pageOpeningBalance: page.pageOpeningBalance,
+      rows: page.rows.map((r) => ({ ...r, date: ledgerDateKey(r.date) })),
+      offset: page.offset,
+      limit: page.limit,
+      total: page.total,
+      truncated: page.truncated,
+      nextOffset: page.nextOffset,
     });
   } catch (error) {
     return booksError(error);
