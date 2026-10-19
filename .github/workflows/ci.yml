@@ -29,6 +29,10 @@ jobs:
 
   secrets:
     runs-on: ubuntu-latest
+    # gitleaks lists a pull request's commits through the API
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
