@@ -1,6 +1,6 @@
 # Base image pinned by digest so a rebuild can't silently pick up a different
 # image. Bump the tag and digest together (Renovate/Dependabot can do this).
-FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS builder
+FROM node:26-alpine@sha256:6f08a523443ddedf52941874c203475b0ad503e859ad70cb26ab8be9a517dbd5 AS builder
 WORKDIR /app
 
 RUN corepack enable && corepack prepare yarn@4.9.0 --activate
@@ -25,7 +25,7 @@ RUN DATABASE_URL=postgresql://build:build@127.0.0.1:1/build \
     sh -c 'node node_modules/prisma/build/index.js generate && yarn build'
 
 # ─── Runner ──────────────────────────────────────────────────────────────────
-FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS runner
+FROM node:26-alpine@sha256:6f08a523443ddedf52941874c203475b0ad503e859ad70cb26ab8be9a517dbd5 AS runner
 WORKDIR /app
 
 RUN corepack enable && corepack prepare yarn@4.9.0 --activate
