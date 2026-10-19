@@ -1,0 +1,85 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_TIMESTAMP: ${BUILD_TIMESTAMP:-0}
+        NEXT_PUBLIC_SUPPORT_EMAIL: ${NEXT_PUBLIC_SUPPORT_EMAIL:-}
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    # The app needs no Linux capabilities and writes nothing outside the two
+    # tmpfs mounts; a compromised process can't escalate or persist changes.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache:uid=1000,gid=1000,mode=0755
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 1g
+    pids_limit: 256
+    environment:
+      # The application's own (least-privilege) database role; see docs/security/DB-ROLES.md.
+      DATABASE_URL: ${DATABASE_URL}
+      # The schema owner, used only to run migrations at start-up. Unset = single-role (warns).
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-}
+      AUTH_SECRET: ${AUTH_SECRET}
+      NEXTAUTH_URL: ${NEXTAUTH_URL}
+      AUTH_TRUST_HOST: "true"
+      HOSTNAME: "0.0.0.0"
+      PORT: "3000"
+      HERMES_API_TOKEN: ${HERMES_API_TOKEN}
+      # id:base64key entries, first is current. See src/lib/crypto.ts.
+      DATA_ENCRYPTION_KEYS: ${DATA_ENCRYPTION_KEYS:-}
+      # Who must use two-factor sign-in. Unset = ADMIN,PM; "none" = nobody.
+      # MFA_ENFORCE_ALL_FROM (YYYY-MM-DD) makes every role required from that day.
+      MFA_REQUIRED_ROLES: ${MFA_REQUIRED_ROLES-ADMIN,PM}
+      MFA_ENFORCE_ALL_FROM: ${MFA_ENFORCE_ALL_FROM:-}
+      # Comma-separated IPs of the reverse proxy; see trusted-proxy.mjs.
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
+      # Security alerts (S5.2): a signed JSON POST per event, e.g. to an n8n webhook.
+      SECURITY_ALERT_WEBHOOK_URL: ${SECURITY_ALERT_WEBHOOK_URL:-}
+      SECURITY_ALERT_WEBHOOK_SECRET: ${SECURITY_ALERT_WEBHOOK_SECRET:-}
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    networks:
+      - app-network
+
+  # Optional: included PostgreSQL — comment out if using an external database.
+  # Requires POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB in .env
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-smartvie_pm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_DB: ${POSTGRES_DB:-smartvie_pm}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smartvie_pm} -d ${POSTGRES_DB:-smartvie_pm}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+    profiles:
+      - with-db
+
+volumes:
+  pgdata:
+
+networks:
+  app-network:
+    driver: bridge
