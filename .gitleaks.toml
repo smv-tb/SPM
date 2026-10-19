@@ -1,0 +1,10 @@
+# Extend the default rules; only these two test files hold dummy credentials.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Dummy secrets used as test fixtures (redaction and key-validation tests)"
+paths = [
+  '''deploy/backup/test_smartvie_backup\.py''',
+  '''src/lib/__tests__/log\.test\.ts''',
+]
