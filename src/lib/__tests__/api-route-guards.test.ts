@@ -29,6 +29,7 @@ const AUTHORIZES =
  */
 const OPEN: Record<string, string> = {
   "health/route.ts#GET": "liveness probe for Docker; returns only ok/error and touches no data",
+  "csp-report/route.ts#POST": "the browser posts CSP violation reports itself, with no session; the handler only writes one redacted log line",
   "auth/[...nextauth]/route.ts#GET": "NextAuth's own handlers: sign-in, session, CSRF token",
   "auth/[...nextauth]/route.ts#POST": "NextAuth's own handlers: sign-in, sign-out",
 };
