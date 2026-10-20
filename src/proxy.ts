@@ -4,6 +4,7 @@ import {
   API_RATE_LIMIT, HERMES_RATE_LIMIT, createRateLimiter, type RateLimitDecision,
 } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
+import { buildCsp, newNonce, CSP_REPORT_PATH } from "@/lib/csp";
 
 /**
  * Proxy for CSRF protection and API rate limiting.
@@ -53,6 +54,20 @@ function rateLimitHeaders(d: RateLimitDecision): Record<string, string> {
 // ---------------------------------------------------------------------------
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // Pages: mint a nonce and attach the report-only CSP (S5.1). The policy goes
+  // on the *request* too, which is how Next finds the nonce to stamp on its own
+  // scripts. API routes carry no markup, so they skip this.
+  if (!pathname.startsWith("/api/")) {
+    const nonce = newNonce();
+    const csp = buildCsp(nonce, { dev: process.env.NODE_ENV !== "production" });
+    const headers = new Headers(request.headers);
+    headers.set("x-nonce", nonce);
+    headers.set("Content-Security-Policy-Report-Only", csp);
+    const response = NextResponse.next({ request: { headers } });
+    response.headers.set("Content-Security-Policy-Report-Only", csp);
+    return response;
+  }
 
   // Skip processing for static files, Next.js internals, and NextAuth routes
   if (
@@ -114,11 +129,13 @@ export function proxy(request: NextRequest) {
   }
 
   // --- CSRF protection for API routes ---
+  // /api/csp-report is exempt too: browsers send violation reports themselves,
+  // without custom headers. It is still rate limited above and only logs.
   // /api/hermes is exempt: it's authenticated with a bearer token (checked in
   // the route itself), not ambient cookies/sessions, so it isn't a CSRF
   // target — a malicious page can't forge an Authorization header it doesn't
   // have. It still goes through rate limiting above.
-  if (pathname.startsWith("/api/") && !pathname.startsWith("/api/hermes")) {
+  if (pathname.startsWith("/api/") && !pathname.startsWith("/api/hermes") && pathname !== CSP_REPORT_PATH) {
     const method = request.method;
 
     // Mutation methods: require X-Requested-By header
@@ -198,7 +215,8 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Match all API routes
+    // API routes (rate limiting, CSRF) and pages (CSP nonce); not static assets.
     "/api/:path*",
+    "/((?!api/|_next/static|_next/image|images/|favicon).*)",
   ],
 };

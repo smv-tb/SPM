@@ -6,6 +6,17 @@ Most small teams juggle a task tracker, a funding spreadsheet and a separate acc
 
 > **Status: under active development.** It is used in production by its authors but is not yet packaged for general use. Expect rough edges, breaking changes and gaps in the documentation. No release has been tagged.
 
+## Disclaimer
+
+Smartvie PM is published as-is, without warranty of any kind, under the terms of the [AGPL-3.0](LICENSE) (see sections 15 and 16 of the licence). In particular:
+
+- **You are responsible for your own deployment and your own data.** If you run this software, you decide where it is hosted, how it is configured, secured, backed up and updated, and what information goes into it. Smartvie, its authors and its contributors do not host, see, store or have access to your instance or your data, and accept no responsibility or liability for how you use or store it, including any loss, leak, corruption or misuse of data.
+- **It is not professional advice and not certified software.** The accounting, funding and reporting features are tools, not accounting, tax, legal or financial advice, and they have not been audited or certified for any regulatory or statutory purpose (including VAT, Companies House, HMRC or any equivalent). Check figures with a qualified professional before relying on them.
+- **The security features are not a guarantee.** They reduce risk but cannot remove it. You must review the code, apply your own controls and keep your installation patched.
+- **The project changes as we see fit.** Features, data models, migrations and APIs may change, break or be removed at any time, with no obligation to provide support, fixes, upgrade paths or backwards compatibility.
+
+Nothing here limits any right you have under the licence.
+
 ## What it does
 
 **Project management**
@@ -127,6 +138,6 @@ deploy/          backup and deployment helpers
 
 ## Contributing and licence
 
-Smartvie PM is free software under the [GNU Affero General Public License v3.0](LICENSE). If you run a modified version as a network service, the AGPL requires you to offer its users the source of your changes.
+Use of this software is subject to the [Disclaimer](#disclaimer) above. Smartvie PM is free software under the [GNU Affero General Public License v3.0](LICENSE). If you run a modified version as a network service, the AGPL requires you to offer its users the source of your changes.
 
 Contributions are welcome: see [`CONTRIBUTING.md`](CONTRIBUTING.md). To report a vulnerability, follow [`SECURITY.md`](SECURITY.md) rather than opening a public issue.
