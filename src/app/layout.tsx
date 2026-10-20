@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Nunito } from "next/font/google";
+import { headers } from "next/headers";
 import "./globals.css";
 import { THEME_INIT_SCRIPT } from "@/lib/theme";
 
@@ -11,11 +12,13 @@ export const metadata: Metadata = {
   description: "Smartvie Ecosystem — Project Management",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // The proxy mints a nonce per request (S5.1); an inline script needs it to run under the CSP.
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html lang="en" suppressHydrationWarning className={nunito.variable}>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
       </head>
       <body>{children}</body>
     </html>
