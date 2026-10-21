@@ -1,11 +1,9 @@
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import pg from "pg";
 
-const { Pool } = pg;
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const adapter = new PrismaPg(pool);
+// PrismaPg takes a config object (it builds its own pool); passing a pg.Pool is
+// silently read as "no connection string" and falls back to localhost.
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
 
