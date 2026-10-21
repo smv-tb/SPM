@@ -1,6 +1,13 @@
+import { readFileSync } from "node:fs";
+
+// package.json is the one place the version lives; `yarn release` bumps it.
+const { version } = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  // Inlined at build time, so a running server and the page it served each know their own version.
+  env: { NEXT_PUBLIC_APP_VERSION: version },
   // Next 16.3+ appends its own block to AGENTS.md on every `next dev`; this repo keeps its own.
   agentRules: false,
   async headers() {

@@ -12,6 +12,7 @@
     "prebuild": "prisma generate",
     "start": "next start",
     "lint": "eslint src/",
+    "release": "node scripts/release.mjs",
     "hermes": "tsx src/hermes/index.ts",
     "encrypt:bank-numbers": "tsx scripts/encrypt-bank-numbers.ts",
     "test": "vitest",

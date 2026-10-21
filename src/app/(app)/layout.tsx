@@ -10,6 +10,7 @@ import { isMfaEnabled } from "@/lib/mfa/service";
 import { ConfirmDialogHost } from "@/components/ui/confirm-dialog";
 import { StepUpDialog } from "@/components/settings/StepUpDialog";
 import { resolveProjectScope } from "@/lib/current-project";
+import { UpdateNotices } from "@/components/layout/UpdateNotices";
 import { FrameUserProvider } from "@/components/layout/user-context";
 
 const ROLE_LABELS: Record<string, string> = { ADMIN: "Administrator", PM: "Project manager", CONTRIBUTOR: "Contributor", VIEWER: "Read-only" };
@@ -69,6 +70,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         fallbackProjectId={project?.id ?? null}
       />
       <div id="main-content" tabIndex={-1} className="flex flex-col flex-1 min-w-0 focus:outline-none">
+        <UpdateNotices />
         {showMfaNotice && deadline !== null && (
           <div role="status" className="bg-warning/10 border-b border-warning text-warning text-sm px-6 py-2">
             Two-factor sign-in becomes required on{" "}

@@ -28,3 +28,12 @@ CI runs the same checks plus a dependency audit and a secret scan.
 ## Reporting bugs and vulnerabilities
 
 Bugs: open an issue with steps to reproduce. Security problems: follow [`SECURITY.md`](SECURITY.md) instead.
+
+## Releasing
+
+1. Add an entry at the top of `RELEASES` in `src/lib/releases.ts` (plain-language highlights) and commit it to `main`.
+2. `yarn release x.y.z` bumps `package.json`, commits and tags `vx.y.z`.
+3. `git push && git push --tags`. The *Release* workflow publishes `ghcr.io/smv-tb/spm:x.y.z` (also `x.y` and `latest`) and a GitHub release.
+4. Deploy with `./deploy.sh` (build from source) or `docker compose pull app && docker compose up -d`.
+
+Signed-in users see a "What's new" notice once after the upgrade, and a "Refresh to update" prompt on pages left open across it.

@@ -1,5 +1,8 @@
 services:
   app:
+    # Prebuilt release: `SMARTVIE_VERSION=0.2.0 docker compose pull app` (default: latest).
+    # `up --build` still builds from source and tags the result with this name.
+    image: ghcr.io/smv-tb/spm:${SMARTVIE_VERSION:-latest}
     build:
       context: .
       dockerfile: Dockerfile
