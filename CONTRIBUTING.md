@@ -9,12 +9,13 @@ You need Node.js 22+, Yarn 4 (via Corepack) and PostgreSQL. See the README's *Ge
 ## Before opening a pull request
 
 ```bash
-yarn lint
-yarn tsc --noEmit
-yarn test --run
+yarn verify      # tsc, lint, unit tests
+yarn test:db     # database rules and ledger services on a throwaway PostgreSQL (needs initdb/psql on PATH)
 ```
 
-CI runs the same checks plus a dependency audit and a secret scan.
+There is no CI: run these yourself before merging. `yarn hooks:install` makes `git push` run `yarn verify` first (skip once with `--no-verify`). Run `yarn test:db` whenever you touch a migration or anything under `src/lib/accounting/`. `yarn test:coverage` reports coverage for `src/lib` and `src/hermes`, and fails below the floor in `vitest.config.ts`; raise the floor as it improves.
+
+Set `E2E_STRICT=1` when running `yarn test:e2e` to make missing credentials fail instead of skipping.
 
 ## Ground rules
 
@@ -33,7 +34,7 @@ Bugs: open an issue with steps to reproduce. Security problems: follow [`SECURIT
 
 1. Add an entry at the top of `RELEASES` in `src/lib/releases.ts` (plain-language highlights) and commit it to `main`.
 2. `yarn release x.y.z` bumps `package.json`, commits and tags `vx.y.z`.
-3. `git push && git push --tags`. The *Release* workflow publishes `ghcr.io/smv-tb/spm:x.y.z` (also `x.y` and `latest`) and a GitHub release.
-4. Deploy with `./deploy.sh` (build from source) or `docker compose pull app && docker compose up -d`.
+3. `git push && git push --tags`. Nothing is published automatically; optionally create a GitHub release from the tag with `gh release create vx.y.z --generate-notes`.
+4. Deploy with `./deploy.sh`, which builds the image from source on the server.
 
 Signed-in users see a "What's new" notice once after the upgrade, and a "Refresh to update" prompt on pages left open across it.

@@ -43,7 +43,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (url: string) => {
       if (String(url).includes("analytics")) {
-        return { ok: false, status: 401, json: async () => ({ error: "Unauthorized" }) };
+        return { ok: true, status: 200, json: async () => ({}) };
       }
       if (String(url).includes("forecast=true")) {
         return {
@@ -105,8 +105,14 @@ describe("FundingClient view toggle", () => {
   });
 
   it("keeps both views usable when the analytics request fails", async () => {
-    // Analytics 401s in this suite's fetch stub. A failure there must not take
-    // the rest of the page down with it.
+    // A failure in analytics must not take the rest of the page down with it.
+    const original = fetch as unknown as (url: string) => Promise<unknown>;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+      String(url).includes("analytics")
+        ? { ok: false, status: 401, json: async () => ({ error: "Unauthorized" }) }
+        : original(url)));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     render(<FundingClient initialRecords={records} projectId="p1" />);
     expect(await screen.findByText(/Section 1 — Live/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Pipeline/i }));

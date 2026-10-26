@@ -18,7 +18,11 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:e2e": "playwright test",
-    "test:backup": "python3 -m unittest discover -s deploy/backup"
+    "test:backup": "python3 -m unittest discover -s deploy/backup",
+    "verify": "bash scripts/verify.sh",
+    "test:db": "bash scripts/db-checks.sh",
+    "hooks:install": "git config core.hooksPath .githooks",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.3",
@@ -74,6 +78,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.1.2",
+    "@vitest/coverage-v8": "^4.1.12",
     "@vitest/ui": "^4.1.12",
     "eslint": "^9.0.0",
     "eslint-config-next": "^16.3.8",
