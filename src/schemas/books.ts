@@ -187,6 +187,31 @@ export const invoiceVoidSchema = z.object({
   reason: z.string().min(1, "Say why it is being voided").max(300),
 });
 
+export const billLineSchema = z.object({
+  // Blank is checked by `validateBill`, which can say which line it is.
+  description: z.string().max(500),
+  quantity: quantity.default("1"),
+  unitPrice: amount,
+  /** May be empty on a draft; approval needs one. */
+  accountId: z.string().uuid("Invalid account").nullable().optional(),
+  vatCode: z.string().max(20).nullable().optional(),
+});
+
+export const billSchema = z.object({
+  contactId: z.string().uuid("Choose a supplier"),
+  /** The supplier's own invoice number. */
+  supplierReference: z.string().max(100).nullable().optional(),
+  issueDate: dateOnly,
+  /** Omitted takes the bill date plus the supplier's usual terms. */
+  dueDate: dateOnly.nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  // Tracking dimension: legacy project ids are not UUIDs (see journal lines).
+  projectId: z.string().min(1).nullable().optional(),
+  lines: z.array(billLineSchema).min(1, "Add at least one line").max(200),
+  /** Approve immediately rather than leaving a draft. */
+  approve: z.boolean().default(false),
+});
+
 export const creditNoteSchema = z.object({
   contactId: z.string().uuid("Choose a customer"),
   /** The invoice being corrected; null for credit not tied to one. */
@@ -304,6 +329,8 @@ export type InvoiceLineRequest = z.infer<typeof invoiceLineSchema>;
 export type InvoiceRequest = z.infer<typeof invoiceSchema>;
 export type InvoiceSendInput = z.infer<typeof invoiceSendSchema>;
 export type InvoiceVoidInput = z.infer<typeof invoiceVoidSchema>;
+export type BillLineRequest = z.infer<typeof billLineSchema>;
+export type BillRequest = z.infer<typeof billSchema>;
 export type CreditNoteRequest = z.infer<typeof creditNoteSchema>;
 export type CreditAllocationRequest = z.infer<typeof creditAllocationSchema>;
 export type PaymentRequest = z.infer<typeof paymentSchema>;

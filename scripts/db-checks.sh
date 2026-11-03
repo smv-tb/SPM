@@ -43,6 +43,7 @@ svc credit-note-service.ts
 svc payment-service.ts
 svc statement-service.ts
 svc reconciliation-service.ts
+svc bill-service.ts
 svc balance-sheet.ts
 svc profit-and-loss.ts
 sql contact-anonymisation.sql

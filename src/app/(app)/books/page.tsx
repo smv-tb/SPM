@@ -15,13 +15,14 @@ import { formatPence } from "@/lib/money";
 import { formatDate } from "@/lib/utils";
 import { AlertTriangle, BookOpen, FileSpreadsheet, Hourglass, Scale, TrendingUp } from "lucide-react";
 import { settlementInclude } from "@/lib/accounting/settlement";
+import { OPEN_BILL_STATUSES } from "@/lib/accounting/bill";
 
 export default async function BooksPage() {
   const session = await auth();
   if (!session) redirect("/login");
   if (!hasPermission(session, "books:view")) redirect("/dashboard");
 
-  const [settings, drafts, posted, accounts, movements, openInvoices, credits, draftInvoices, draftCreditNotes, unreconciledLines] =
+  const [settings, drafts, posted, accounts, movements, openInvoices, credits, draftInvoices, draftCreditNotes, unreconciledLines, openBills, draftBills] =
     await Promise.all([
     prisma.companySettings.findUnique({ where: { id: COMPANY_SETTINGS_ID } }),
     prisma.journalEntry.count({ where: { status: "DRAFT" } }),
@@ -46,6 +47,11 @@ export default async function BooksPage() {
     prisma.invoice.count({ where: { status: "DRAFT" } }),
     prisma.creditNote.count({ where: { status: "DRAFT" } }),
     prisma.statementLine.count({ where: { reconciledAt: null } }),
+    prisma.bill.findMany({
+      where: { status: { in: [...OPEN_BILL_STATUSES] } },
+      select: { total: true, dueDate: true },
+    }),
+    prisma.bill.count({ where: { status: "DRAFT" } }),
   ]);
 
   const trialBalance = buildTrialBalance(
@@ -93,6 +99,10 @@ export default async function BooksPage() {
   );
   const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+  // What we owe suppliers. Until supplier payments arrive, an open bill is owed in full.
+  const owedToSuppliers = openBills.reduce((sum, bill) => sum + toPence(bill.total), 0);
+  const overdueBills = openBills.filter((b) => ledgerDateKey(b.dueDate) < todayKey);
+
   // Most urgent first; an item with nothing to do shows as clear rather than disappearing.
   const attention: { key: string; count: number; title: string; detail: string; href: string; action: string }[] = [
     {
@@ -110,6 +120,21 @@ export default async function BooksPage() {
       detail: "Nothing posts to the ledger until it is approved",
       href: "/books/invoices",
       action: "Review drafts",
+    },
+    {
+      key: "bills",
+      count: overdueBills.length + draftBills,
+      title:
+        overdueBills.length > 0
+          ? `${plural(overdueBills.length, "supplier bill")} past due`
+          : draftBills > 0
+            ? `${plural(draftBills, "draft bill")} waiting for approval`
+            : "No supplier bills past due or waiting",
+      detail:
+        `${formatPence(owedToSuppliers)} owed to suppliers` +
+        (overdueBills.length > 0 && draftBills > 0 ? `; ${plural(draftBills, "draft bill")} to approve` : ""),
+      href: "/books/bills",
+      action: "Open bills",
     },
     {
       key: "bank",

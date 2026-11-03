@@ -247,6 +247,7 @@ model LedgerAccount {
   invoiceLines InvoiceLine[]    @relation("InvoiceLineIncomeAccount")
   creditNoteLines CreditNoteLine[] @relation("CreditNoteLineIncomeAccount")
   customerPayments CustomerPayment[] @relation("PaymentBankAccount")
+  billLines       BillLine[]       @relation("BillLineAccount")
   bankAccount     BankAccount?
 
   @@index([type])
@@ -291,6 +292,7 @@ model JournalEntry {
   invoice    Invoice?
   creditNote CreditNote?
   customerPayment CustomerPayment?
+  bill       Bill?
 
   @@unique([sourceType, sourceId])
   @@index([date])
@@ -361,6 +363,7 @@ model Contact {
   invoices Invoice[]
   creditNotes CreditNote[]
   customerPayments CustomerPayment[]
+  bills Bill[]
 
   @@index([type])
   @@index([name])
@@ -693,6 +696,108 @@ model PaymentAllocation {
   @@map("payment_allocations")
 }
 
+enum BillStatus {
+  DRAFT
+  APPROVED
+  PART_PAID
+  PAID
+  VOID
+}
+
+/// A supplier's bill. The mirror of an invoice: a draft is freely editable;
+/// approving it posts Dr each line's account / Cr trade creditors, after which
+/// the document is fixed and corrected by a void, never an edit. We do not
+/// number bills ourselves — the supplier's own invoice number identifies one,
+/// and entering the same bill twice is refused per supplier.
+model Bill {
+  id                String     @id @default(uuid())
+  status            BillStatus @default(DRAFT)
+  contactId         String
+  /// The supplier's invoice number. Unique per supplier among bills that are
+  /// not void (a partial unique index, case- and space-insensitive).
+  supplierReference String?
+  issueDate         DateTime   @db.Date
+  /// Taken from the supplier's document, not worked out from terms.
+  dueDate           DateTime   @db.Date
+  notes             String?
+  /// The supplier as billed, snapshotted like an invoice's customer.
+  supplierName      String
+
+  subtotal          Decimal    @default(0) @db.Decimal(14, 2)
+  total             Decimal    @default(0) @db.Decimal(14, 2)
+
+  /// Tracking dimension carried onto the journal lines. No foreign key.
+  projectId         String?
+  /// The journal raised at approval; null while a draft.
+  journalEntryId    String?    @unique
+
+  createdById       String?
+  approvedById      String?
+  approvedAt        DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  lines        BillLine[]
+  attachments  BillAttachment[]
+  contact      Contact       @relation(fields: [contactId], references: [id], onDelete: Restrict)
+  journalEntry JournalEntry? @relation(fields: [journalEntryId], references: [id], onDelete: Restrict)
+  createdBy    User?         @relation("BillCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedBy   User?         @relation("BillApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([status, issueDate])
+  @@index([contactId])
+  @@index([dueDate])
+  @@map("bills")
+}
+
+model BillLine {
+  id          String  @id @default(uuid())
+  billId      String
+  lineNumber  Int
+  description String
+  quantity    Decimal @db.Decimal(14, 3)
+  unitPrice   Decimal @db.Decimal(14, 2)
+  /// quantity × unitPrice rounded half away from zero; a CHECK repeats it.
+  amount      Decimal @db.Decimal(14, 2)
+  /// Unused until VAT registration; present so enabling VAT needs no rewrite.
+  vatCode     String?
+  /// Where approval debits this line: a live expense account, or an asset
+  /// account that is not trade debtors or a bank (fixed assets, prepayments).
+  /// May be empty on a draft; approval needs one on every line.
+  accountId   String?
+
+  bill    Bill           @relation(fields: [billId], references: [id], onDelete: Cascade)
+  account LedgerAccount? @relation("BillLineAccount", fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@unique([billId, lineNumber])
+  @@index([accountId])
+  @@map("bill_lines")
+}
+
+/// The supplier's document as received — a PDF or a photo. Held in the
+/// database so it is in the encrypted backups with the bill it supports. Only
+/// a draft's attachments can be removed; once the bill is approved they are
+/// its evidence. The bytes are never put in an audit row or a list response.
+model BillAttachment {
+  id           String   @id @default(uuid())
+  billId       String
+  /// As uploaded, cleaned of path and control characters.
+  fileName     String
+  /// Decided from the file's own first bytes, never from what the browser said.
+  contentType  String
+  size         Int
+  sha256       String
+  data         Bytes
+  uploadedById String?
+  createdAt    DateTime @default(now())
+
+  bill       Bill  @relation(fields: [billId], references: [id], onDelete: Cascade)
+  uploadedBy User? @relation("BillAttachmentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([billId])
+  @@map("bill_attachments")
+}
+
 /// A real bank account, linked one-to-one to the 12xx ledger account its
 /// money is booked to. Holds the details a statement file is checked against
 /// and the import profile that reads that bank's files.
@@ -974,6 +1079,9 @@ model User {
   reconciliations     BankReconciliation[]
   statementUndos      StatementImport[]  @relation("StatementUndoer")
   paymentAllocations  PaymentAllocation[]
+  billsCreated        Bill[]             @relation("BillCreator")
+  billsApproved       Bill[]             @relation("BillApprover")
+  billAttachments     BillAttachment[]   @relation("BillAttachmentUploader")
   recoveryCodes       RecoveryCode[]
   stepUps             StepUpVerification[]
 

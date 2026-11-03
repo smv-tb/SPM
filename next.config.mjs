@@ -60,6 +60,13 @@ const nextConfig = {
           },
         ],
       },
+      {
+        // Uploaded supplier documents: nothing in one may run or load anything,
+        // even if a browser opens it instead of saving it. Listed after the
+        // rule above because, for the same header, the later rule wins.
+        source: "/api/books/bills/:id/attachments/:attachmentId",
+        headers: [{ key: "Content-Security-Policy", value: "default-src 'none'; sandbox" }],
+      },
     ];
   },
 };

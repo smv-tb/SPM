@@ -474,3 +474,98 @@ export function serializeBankAccount(
 }
 
 export type SerializedBankAccount = ReturnType<typeof serializeBankAccount>;
+
+interface BillLineRow {
+  id: string;
+  lineNumber: number;
+  description: string;
+  quantity: { toFixed(): string } | string | number;
+  unitPrice: Money;
+  amount: Money;
+  vatCode: string | null;
+  accountId: string | null;
+  account?: { code: string; name: string } | null;
+}
+
+interface BillAttachmentRow {
+  id: string;
+  fileName: string;
+  contentType: string;
+  size: number;
+  createdAt: Date;
+}
+
+interface BillRow {
+  id: string;
+  status: string;
+  contactId: string;
+  supplierReference: string | null;
+  supplierName: string;
+  issueDate: Date;
+  dueDate: Date;
+  notes: string | null;
+  subtotal: Money;
+  total: Money;
+  projectId: string | null;
+  journalEntryId: string | null;
+  approvedAt: Date | null;
+  createdAt: Date;
+  lines?: BillLineRow[];
+  attachments?: BillAttachmentRow[];
+  journalEntry?: { id: string; number: number | null } | null;
+  _count?: { attachments: number };
+}
+
+/** The row shown in a list: no lines, so a page of 50 stays small. */
+export function serializeBillRow(bill: BillRow) {
+  const total = toPence(bill.total);
+  const open = bill.status !== "DRAFT" && bill.status !== "VOID";
+  return {
+    id: bill.id,
+    status: bill.status,
+    contactId: bill.contactId,
+    supplierName: bill.supplierName,
+    supplierReference: bill.supplierReference,
+    issueDate: ledgerDateKey(bill.issueDate),
+    dueDate: ledgerDateKey(bill.dueDate),
+    total,
+    /** What we still owe the supplier; nothing on a draft or a void. */
+    amountDue: open ? total : 0,
+    attachmentCount: bill._count?.attachments ?? bill.attachments?.length ?? 0,
+  };
+}
+
+export function serializeBill(bill: BillRow) {
+  return {
+    ...serializeBillRow(bill),
+    notes: bill.notes,
+    subtotal: toPence(bill.subtotal),
+    projectId: bill.projectId,
+    journalEntryId: bill.journalEntryId,
+    journalNumber: bill.journalEntry?.number ?? null,
+    approvedAt: bill.approvedAt?.toISOString() ?? null,
+    createdAt: bill.createdAt.toISOString(),
+    lines: bill.lines?.map((line) => ({
+      id: line.id,
+      lineNumber: line.lineNumber,
+      description: line.description,
+      // The exact decimal as stored: "0.5", not 0.5 through a float.
+      quantity: typeof line.quantity === "object" ? line.quantity.toFixed() : String(line.quantity),
+      unitPrice: toPence(line.unitPrice),
+      amount: toPence(line.amount),
+      vatCode: line.vatCode,
+      accountId: line.accountId,
+      accountCode: line.account?.code ?? null,
+      accountName: line.account?.name ?? null,
+    })),
+    attachments: (bill.attachments ?? []).map((a) => ({
+      id: a.id,
+      fileName: a.fileName,
+      contentType: a.contentType,
+      size: a.size,
+      createdAt: a.createdAt.toISOString(),
+    })),
+  };
+}
+
+export type SerializedBill = ReturnType<typeof serializeBill>;

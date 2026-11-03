@@ -68,7 +68,7 @@ export async function loadSeparationRequired(db: Db): Promise<boolean> {
  */
 export async function enforceSeparation(
   db: Db,
-  action: { thing: "invoice" | "credit note" | "journal"; verb: "approve" | "reverse" },
+  action: { thing: "invoice" | "credit note" | "bill" | "journal"; verb: "approve" | "reverse" },
   actorUserId: string | null,
   involvedUserIds: ReadonlyArray<string | null | undefined>
 ): Promise<{ selfApproved: boolean }> {

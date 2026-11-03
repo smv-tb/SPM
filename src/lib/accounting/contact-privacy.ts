@@ -121,7 +121,7 @@ function stripInternal(value: unknown): unknown {
 
 /**
  * Everything held about one contact, for a subject access request: the contact
- * record, its invoices (with lines), credit notes, payments, and what the audit
+ * record, its invoices (with lines), credit notes, payments, bills, and what the audit
  * log says about the contact. Staff identifiers and hash-chain internals are
  * left out — they describe our people and our log, not the subject.
  */
@@ -129,10 +129,19 @@ export async function exportContactData(db: Db, contactId: string) {
   const contact = await db.contact.findUnique({ where: { id: contactId } });
   if (!contact) throw new AccountingError("NOT_FOUND", "Contact not found", 404);
 
-  const [invoices, creditNotes, payments, audit] = await Promise.all([
+  const [invoices, creditNotes, payments, bills, audit] = await Promise.all([
     db.invoice.findMany({ where: { contactId }, include: { lines: true }, orderBy: { issueDate: "asc" } }),
     db.creditNote.findMany({ where: { contactId }, include: { lines: true }, orderBy: { issueDate: "asc" } }),
     db.customerPayment.findMany({ where: { contactId }, orderBy: { date: "asc" } }),
+    // Attachments are listed, not embedded: the files themselves are downloaded from the bill.
+    db.bill.findMany({
+      where: { contactId },
+      include: {
+        lines: true,
+        attachments: { select: { fileName: true, contentType: true, size: true, createdAt: true } },
+      },
+      orderBy: { issueDate: "asc" },
+    }),
     db.auditLog.findMany({
       where: { entityType: "Contact", entityId: contactId },
       select: { occurredAt: true, action: true, before: true, after: true, reason: true },
@@ -147,6 +156,7 @@ export async function exportContactData(db: Db, contactId: string) {
     invoices: stripInternal(invoices),
     creditNotes: stripInternal(creditNotes),
     payments: stripInternal(payments),
+    bills: stripInternal(bills),
     auditTrail: toAuditJson(audit),
   };
 }
