@@ -5,24 +5,19 @@ import { withErrorHandler } from "@/lib/api-errors";
 import { booksError, invalidRequest, requireBooks } from "@/lib/books-api";
 import { toLedgerDate } from "@/lib/accounting/dates";
 import { toBillLines } from "@/lib/accounting/input";
-import { asBillError, attachmentMeta, deleteDraftBill, updateDraftBill } from "@/lib/accounting/bills";
+import { asBillError, billDetail, deleteDraftBill, updateDraftBill } from "@/lib/accounting/bills";
 import { serializeBill } from "@/lib/accounting/serialize";
 import { billSchema } from "@/schemas/books";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-const withDetail = {
-  lines: { orderBy: { lineNumber: "asc" }, include: { account: { select: { code: true, name: true } } } },
-  attachments: { select: attachmentMeta, orderBy: { createdAt: "asc" } },
-  journalEntry: { select: { id: true, number: true } },
-} as const;
 
 export const GET = withErrorHandler(async (req: NextRequest, { params }: RouteContext) => {
   const guard = await requireBooks(req, "books:view");
   if (!guard.ok) return guard.response;
 
   const { id } = await params;
-  const bill = await prisma.bill.findUnique({ where: { id }, include: withDetail });
+  const bill = await prisma.bill.findUnique({ where: { id }, include: billDetail });
   if (!bill) return NextResponse.json({ error: "Bill not found" }, { status: 404 });
   return NextResponse.json(serializeBill(bill));
 });

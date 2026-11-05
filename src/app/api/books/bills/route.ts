@@ -7,6 +7,7 @@ import { toLedgerDate } from "@/lib/accounting/dates";
 import { toBillLines } from "@/lib/accounting/input";
 import { approveBill, asBillError, createDraftBill } from "@/lib/accounting/bills";
 import { serializeBill, serializeBillRow } from "@/lib/accounting/serialize";
+import { billSettlementInclude } from "@/lib/accounting/supplier-payments";
 import { BILL_STATUSES, type BillStatus } from "@/lib/accounting/bill";
 import { billSchema } from "@/schemas/books";
 
@@ -34,7 +35,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
       orderBy: [{ issueDate: "desc" }, { createdAt: "desc" }],
       skip: (page - 1) * PAGE_SIZE,
       take: PAGE_SIZE,
-      include: { _count: { select: { attachments: true } } },
+      include: { _count: { select: { attachments: true } }, ...billSettlementInclude },
     }),
   ]);
 

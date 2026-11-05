@@ -161,6 +161,18 @@ export function billPostingLines(
   ];
 }
 
+/**
+ * The status a bill's payments imply: paid in full is PAID, partly is
+ * PART_PAID, and nothing paid (a payment voided) returns it to APPROVED.
+ * Drafts and voids are not moved by payments.
+ */
+export function billSettledStatus(current: BillStatus, total: Pence, paid: Pence): BillStatus {
+  if (current === "DRAFT" || current === "VOID") return current;
+  if (paid >= total) return "PAID";
+  if (paid > 0) return "PART_PAID";
+  return "APPROVED";
+}
+
 /** "Bill INV-4471 — Acme Ltd", or without a reference "Bill — Acme Ltd". */
 export function billLabel(bill: { supplierReference: string | null; supplierName: string }): string {
   return bill.supplierReference

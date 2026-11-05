@@ -6,7 +6,7 @@ import { hasPermission } from "@/lib/permissions";
 import { BUSINESS_TIME_ZONE } from "@/lib/constants";
 import { calendarDateKey, toLedgerDate } from "@/lib/accounting/dates";
 import { loadAgedDebtors } from "@/lib/accounting/aged-debtors-query";
-import { AgedDebtorsClient } from "./aged-debtors-client";
+import { AgedReport } from "@/components/books/AgedReport";
 
 export default async function AgedDebtorsPage({ searchParams }: { searchParams: Promise<{ asAt?: string }> }) {
   const session = await auth();
@@ -22,5 +22,5 @@ export default async function AgedDebtorsPage({ searchParams }: { searchParams: 
     asAt = toLedgerDate(today);
   }
 
-  return <AgedDebtorsClient report={await loadAgedDebtors(prisma, asAt)} />;
+  return <AgedReport side="debtors" report={await loadAgedDebtors(prisma, asAt)} />;
 }

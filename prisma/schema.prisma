@@ -89,13 +89,13 @@ enum CustomFieldModule {
 }
 
 model CostCategory {
-  id        String   @id @default(uuid())
-  name      String   @unique
-  tasks     Task[]
-  costs     LivingLabCost[]
+  id           String            @id @default(uuid())
+  name         String            @unique
+  tasks        Task[]
+  costs        LivingLabCost[]
   transactions CashTransaction[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
 
   @@map("cost_categories")
 }
@@ -127,29 +127,29 @@ enum CashSourceType {
 /// Derived rows are reconciled by (sourceType, sourceId): the sync recomputes
 /// what a source *should* have produced and upserts it, so re-running is safe.
 model CashTransaction {
-  id          String         @id @default(uuid())
+  id          String        @id @default(uuid())
   projectId   String
   /// The economic date the money actually moved — never a row-insert timestamp.
   date        DateTime
   /// Always positive; `direction` carries the sign.
-  amount      Decimal        @db.Decimal(12, 2)
+  amount      Decimal       @db.Decimal(12, 2)
   direction   CashDirection
   description String
-  currency    String         @default("GBP")
+  currency    String        @default("GBP")
 
   /// Attribution, all optional — used by budget-vs-actual variance reporting.
   costCategoryId String?
   phaseId        String?
   milestoneId    String?
 
-  sourceType  CashSourceType
+  sourceType CashSourceType
   /// Id of the originating row (tranche, task, lab cost, funding record).
   /// Null for MANUAL entries.
-  sourceId    String?
+  sourceId   String?
 
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
-  createdBy   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
 
   project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   costCategory CostCategory? @relation(fields: [costCategoryId], references: [id], onDelete: SetNull)
@@ -174,49 +174,49 @@ model CashTransaction {
 
 /// Company-wide books configuration. Exactly one row, id "default".
 model CompanySettings {
-  id                String    @id @default("default")
-  legalName         String    @default("")
-  companyNumber     String?
-  vatNumber         String?
-  vatRegistered     Boolean   @default(false)
-  baseCurrency      String    @default("GBP")
+  id                    String    @id @default("default")
+  legalName             String    @default("")
+  companyNumber         String?
+  vatNumber             String?
+  vatRegistered         Boolean   @default(false)
+  baseCurrency          String    @default("GBP")
   /// Financial year start (month 1-12, day 1-28). Needed for year-end close.
-  yearStartMonth    Int       @default(4)
-  yearStartDay      Int       @default(1)
+  yearStartMonth        Int       @default(4)
+  yearStartDay          Int       @default(1)
   /// Nothing dated on or before this day can be posted. Null = unlocked.
-  lockDate          DateTime? @db.Date
+  lockDate              DateTime? @db.Date
   /// Separation of duties: when on, whoever raised an invoice or credit note
   /// cannot approve it, and whoever created or posted a journal cannot reverse
   /// it. Off by default (a one-person company would be blocked); when off, a
   /// self-approval is allowed but recorded as `selfApproved` in the audit log.
-  requireSecondApprover Boolean @default(false)
+  requireSecondApprover Boolean   @default(false)
   /// Next gapless journal number. Incremented inside the posting transaction,
   /// whose row lock also serialises concurrent postings.
-  nextJournalNumber Int       @default(1)
+  nextJournalNumber     Int       @default(1)
 
   // ── Invoicing ──────────────────────────────────────────────────────────────
   /// Our own sequence, deliberately not a continuation of the old tool's.
-  invoicePrefix     String    @default("INV")
-  nextInvoiceNumber Int       @default(1)
+  invoicePrefix        String    @default("INV")
+  nextInvoiceNumber    Int       @default(1)
   /// Minimum digits: INV001. The number grows past the padding rather than wrapping.
-  invoiceNumberPad  Int       @default(3)
+  invoiceNumberPad     Int       @default(3)
   /// Credit notes have a sequence of their own (CN001…), sharing the padding.
-  creditNotePrefix     String  @default("CN")
-  nextCreditNoteNumber Int     @default(1)
+  creditNotePrefix     String    @default("CN")
+  nextCreditNoteNumber Int       @default(1)
   /// Printed on the invoice. A limited company must show its registered
   /// office and place of registration, which the old tool's invoices omitted.
-  registeredAddress String?
-  placeOfRegistration String?
+  registeredAddress    String?
+  placeOfRegistration  String?
   /// Where customers pay. Held once, never typed onto an invoice.
-  bankAccountName   String?
-  bankSortCode      String?
-  bankAccountNumber String?
+  bankAccountName      String?
+  bankSortCode         String?
+  bankAccountNumber    String?
   /// When the bank details on invoices (or a bank account's sort code / number) last changed,
   /// and who did it. The next few invoice approvals show a warning; see bank-details-change.ts.
   bankDetailsChangedAt DateTime?
   bankDetailsChangedBy String?
 
-  updatedAt         DateTime  @updatedAt
+  updatedAt DateTime @updatedAt
 
   @@map("company_settings")
 }
@@ -242,13 +242,14 @@ model LedgerAccount {
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
 
-  lines        JournalLine[]
-  products     ProductService[] @relation("ProductIncomeAccount")
-  invoiceLines InvoiceLine[]    @relation("InvoiceLineIncomeAccount")
-  creditNoteLines CreditNoteLine[] @relation("CreditNoteLineIncomeAccount")
+  lines            JournalLine[]
+  products         ProductService[]  @relation("ProductIncomeAccount")
+  invoiceLines     InvoiceLine[]     @relation("InvoiceLineIncomeAccount")
+  creditNoteLines  CreditNoteLine[]  @relation("CreditNoteLineIncomeAccount")
   customerPayments CustomerPayment[] @relation("PaymentBankAccount")
-  billLines       BillLine[]       @relation("BillLineAccount")
-  bankAccount     BankAccount?
+  billLines        BillLine[]        @relation("BillLineAccount")
+  supplierPayments SupplierPayment[] @relation("SupplierPaymentBankAccount")
+  bankAccount      BankAccount?
 
   @@index([type])
   @@map("ledger_accounts")
@@ -284,15 +285,16 @@ model JournalEntry {
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
 
-  lines      JournalLine[]
-  reverses   JournalEntry?  @relation("JournalReversal", fields: [reversesId], references: [id], onDelete: Restrict)
-  reversedBy JournalEntry?  @relation("JournalReversal")
-  createdBy  User?          @relation("JournalCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  postedBy   User?          @relation("JournalPoster", fields: [postedById], references: [id], onDelete: SetNull)
-  invoice    Invoice?
-  creditNote CreditNote?
+  lines           JournalLine[]
+  reverses        JournalEntry?    @relation("JournalReversal", fields: [reversesId], references: [id], onDelete: Restrict)
+  reversedBy      JournalEntry?    @relation("JournalReversal")
+  createdBy       User?            @relation("JournalCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  postedBy        User?            @relation("JournalPoster", fields: [postedById], references: [id], onDelete: SetNull)
+  invoice         Invoice?
+  creditNote      CreditNote?
   customerPayment CustomerPayment?
-  bill       Bill?
+  bill            Bill?
+  supplierPayment SupplierPayment?
 
   @@unique([sourceType, sourceId])
   @@index([date])
@@ -301,14 +303,14 @@ model JournalEntry {
 }
 
 model JournalLine {
-  id          String   @id @default(uuid())
+  id          String  @id @default(uuid())
   entryId     String
   lineNumber  Int
   accountId   String
   description String?
   /// Exactly one of debit/credit is non-zero (CHECK constraint).
-  debit       Decimal  @default(0) @db.Decimal(14, 2)
-  credit      Decimal  @default(0) @db.Decimal(14, 2)
+  debit       Decimal @default(0) @db.Decimal(14, 2)
+  credit      Decimal @default(0) @db.Decimal(14, 2)
   /// Unused until VAT registration; present so enabling VAT needs no rewrite.
   vatCode     String?
   /// Tracking dimensions. Deliberately no foreign keys: posted lines are
@@ -317,8 +319,8 @@ model JournalLine {
   phaseId     String?
   milestoneId String?
 
-  entry   JournalEntry  @relation(fields: [entryId], references: [id], onDelete: Cascade)
-  account LedgerAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  entry      JournalEntry           @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  account    LedgerAccount          @relation(fields: [accountId], references: [id], onDelete: Restrict)
   reconciled ReconciledJournalLine?
 
   @@unique([entryId, lineNumber])
@@ -338,32 +340,33 @@ enum ContactType {
 /// Customers and suppliers. One table for both: the same organisation is
 /// often on both sides, and splitting them duplicates the address.
 model Contact {
-  id              String      @id @default(uuid())
-  type            ContactType @default(CUSTOMER)
-  name            String
-  email           String?
-  phone           String?
+  id               String      @id @default(uuid())
+  type             ContactType @default(CUSTOMER)
+  name             String
+  email            String?
+  phone            String?
   /// The customer's own VAT/tax number. Printed as "Taxpayer ID" on invoices.
-  taxId           String?
+  taxId            String?
   /// Free text, one line per line — addresses vary too much to split into fields.
-  billingAddress  String?
+  billingAddress   String?
   /// Null means "same as billing", which is the usual case; see effectiveShippingAddress.
-  shippingAddress String?
+  shippingAddress  String?
   /// Days from issue to due. 0 prints "Due on receipt".
-  paymentTermsDays Int        @default(0)
-  notes           String?
+  paymentTermsDays Int         @default(0)
+  notes            String?
   /// Contacts with documents are archived, never deleted.
-  isArchived      Boolean     @default(false)
+  isArchived       Boolean     @default(false)
   /// Set by the `anonymise_contact` database function once its personal details
   /// have been removed (see docs/security/PRIVACY.md). Never set by hand.
-  anonymisedAt    DateTime?
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  anonymisedAt     DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 
-  invoices Invoice[]
-  creditNotes CreditNote[]
+  invoices         Invoice[]
+  creditNotes      CreditNote[]
   customerPayments CustomerPayment[]
-  bills Bill[]
+  bills            Bill[]
+  supplierPayments SupplierPayment[]
 
   @@index([type])
   @@index([name])
@@ -388,8 +391,8 @@ model ProductService {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  incomeAccount LedgerAccount? @relation("ProductIncomeAccount", fields: [incomeAccountId], references: [id], onDelete: Restrict)
-  invoiceLines  InvoiceLine[]
+  incomeAccount   LedgerAccount?   @relation("ProductIncomeAccount", fields: [incomeAccountId], references: [id], onDelete: Restrict)
+  invoiceLines    InvoiceLine[]
   creditNoteLines CreditNoteLine[]
 
   @@index([name])
@@ -426,38 +429,38 @@ model Invoice {
 
   /// The customer as billed. Snapshotted so a later change of address does
   /// not rewrite an invoice that has already gone out.
-  billToName       String
-  billToAddress    String?
-  shipToAddress    String?
-  taxId            String?
+  billToName    String
+  billToAddress String?
+  shipToAddress String?
+  taxId         String?
 
-  subtotal         Decimal       @default(0) @db.Decimal(14, 2)
-  total            Decimal       @default(0) @db.Decimal(14, 2)
+  subtotal Decimal @default(0) @db.Decimal(14, 2)
+  total    Decimal @default(0) @db.Decimal(14, 2)
 
   /// Tracking dimension carried onto the journal lines. No foreign key, for
   /// the same reason journal lines have none.
-  projectId        String?
+  projectId String?
 
   /// The journal raised at approval; null while a draft.
-  journalEntryId   String?       @unique
+  journalEntryId String? @unique
   /// True for invoices imported from Business Finance Assistant: they keep
   /// their original number, are read-only, and are not posted again.
-  isImported       Boolean       @default(false)
+  isImported     Boolean @default(false)
 
-  createdById      String?
-  approvedById     String?
-  approvedAt       DateTime?
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  createdById  String?
+  approvedById String?
+  approvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  lines        InvoiceLine[]
-  contact      Contact       @relation(fields: [contactId], references: [id], onDelete: Restrict)
-  journalEntry JournalEntry? @relation(fields: [journalEntryId], references: [id], onDelete: Restrict)
-  createdBy    User?         @relation("InvoiceCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  approvedBy   User?         @relation("InvoiceApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  lines              InvoiceLine[]
+  contact            Contact             @relation(fields: [contactId], references: [id], onDelete: Restrict)
+  journalEntry       JournalEntry?       @relation(fields: [journalEntryId], references: [id], onDelete: Restrict)
+  createdBy          User?               @relation("InvoiceCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedBy         User?               @relation("InvoiceApprover", fields: [approvedById], references: [id], onDelete: SetNull)
   /// Credit notes raised to correct this invoice.
-  creditNotes       CreditNote[]
-  creditAllocations CreditAllocation[]
+  creditNotes        CreditNote[]
+  creditAllocations  CreditAllocation[]
   paymentAllocations PaymentAllocation[]
 
   @@index([status, issueDate])
@@ -467,27 +470,27 @@ model Invoice {
 }
 
 model InvoiceLine {
-  id          String   @id @default(uuid())
-  invoiceId   String
-  lineNumber  Int
+  id              String  @id @default(uuid())
+  invoiceId       String
+  lineNumber      Int
   /// What was sold, when it came from the catalogue. Kept nullable and
   /// SetNull: the printed line is the snapshot below, not this link.
-  productId   String?
-  code        String?
-  name        String
-  description String?
-  unit        String   @default("item")
+  productId       String?
+  code            String?
+  name            String
+  description     String?
+  unit            String  @default("item")
   /// Fractional quantities are normal here: half a day, 2.5 days.
-  quantity    Decimal  @db.Decimal(14, 3)
-  unitPrice   Decimal  @db.Decimal(14, 2)
+  quantity        Decimal @db.Decimal(14, 3)
+  unitPrice       Decimal @db.Decimal(14, 2)
   /// quantity × unitPrice rounded half away from zero; a CHECK repeats it.
-  amount      Decimal  @db.Decimal(14, 2)
+  amount          Decimal @db.Decimal(14, 2)
   /// Unused until VAT registration; present so enabling VAT needs no rewrite.
-  vatCode     String?
+  vatCode         String?
   /// Where approval credits this line. Null falls back to 4000 Sales.
   incomeAccountId String?
 
-  invoice       Invoice        @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice       Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   product       ProductService? @relation(fields: [productId], references: [id], onDelete: SetNull)
   incomeAccount LedgerAccount?  @relation("InvoiceLineIncomeAccount", fields: [incomeAccountId], references: [id], onDelete: Restrict)
 
@@ -588,19 +591,19 @@ model CreditNoteLine {
 /// against 1100 — so an allocation writes no journal; it says which debt the
 /// credit settles.
 model CreditAllocation {
-  id           String   @id @default(uuid())
+  id           String    @id @default(uuid())
   creditNoteId String
   invoiceId    String?
   /// A refund paying this credit back to the customer (a REFUND payment).
   refundId     String?
-  amount       Decimal  @db.Decimal(14, 2)
-  date         DateTime @db.Date
+  amount       Decimal   @db.Decimal(14, 2)
+  date         DateTime  @db.Date
   /// Set when the credit note or refund is voided: the allocation stops
   /// counting from that day but stays on record, so a report as at an
   /// earlier date still sees it. Allocations are never deleted.
   releasedOn   DateTime? @db.Date
   createdById  String?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime  @default(now())
 
   creditNote CreditNote       @relation(fields: [creditNoteId], references: [id], onDelete: Restrict)
   invoice    Invoice?         @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
@@ -674,16 +677,16 @@ model CustomerPayment {
 /// edited or deleted (only released by a void), and the database refuses
 /// over-allocating either side.
 model PaymentAllocation {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   paymentId   String
   invoiceId   String?
   refundId    String?
-  amount      Decimal  @db.Decimal(14, 2)
-  date        DateTime @db.Date
+  amount      Decimal   @db.Decimal(14, 2)
+  date        DateTime  @db.Date
   /// Set when the receipt or refund is voided; see CreditAllocation.releasedOn.
   releasedOn  DateTime? @db.Date
   createdById String?
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
 
   payment   CustomerPayment  @relation("PaymentSource", fields: [paymentId], references: [id], onDelete: Restrict)
   invoice   Invoice?         @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
@@ -723,26 +726,27 @@ model Bill {
   /// The supplier as billed, snapshotted like an invoice's customer.
   supplierName      String
 
-  subtotal          Decimal    @default(0) @db.Decimal(14, 2)
-  total             Decimal    @default(0) @db.Decimal(14, 2)
+  subtotal Decimal @default(0) @db.Decimal(14, 2)
+  total    Decimal @default(0) @db.Decimal(14, 2)
 
   /// Tracking dimension carried onto the journal lines. No foreign key.
-  projectId         String?
+  projectId      String?
   /// The journal raised at approval; null while a draft.
-  journalEntryId    String?    @unique
+  journalEntryId String? @unique
 
-  createdById       String?
-  approvedById      String?
-  approvedAt        DateTime?
-  createdAt         DateTime   @default(now())
-  updatedAt         DateTime   @updatedAt
+  createdById  String?
+  approvedById String?
+  approvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  lines        BillLine[]
-  attachments  BillAttachment[]
-  contact      Contact       @relation(fields: [contactId], references: [id], onDelete: Restrict)
-  journalEntry JournalEntry? @relation(fields: [journalEntryId], references: [id], onDelete: Restrict)
-  createdBy    User?         @relation("BillCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  approvedBy   User?         @relation("BillApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  lines              BillLine[]
+  attachments        BillAttachment[]
+  paymentAllocations BillPaymentAllocation[]
+  contact            Contact                 @relation(fields: [contactId], references: [id], onDelete: Restrict)
+  journalEntry       JournalEntry?           @relation(fields: [journalEntryId], references: [id], onDelete: Restrict)
+  createdBy          User?                   @relation("BillCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedBy         User?                   @relation("BillApprover", fields: [approvedById], references: [id], onDelete: SetNull)
 
   @@index([status, issueDate])
   @@index([contactId])
@@ -774,6 +778,64 @@ model BillLine {
   @@map("bill_lines")
 }
 
+enum SupplierPaymentStatus {
+  POSTED
+  VOID
+}
+
+/// Money paid to a supplier. The mirror of a customer receipt: it records
+/// what the bank has already done, so it posts as it is recorded (Dr 2100
+/// trade creditors / Cr bank) and a mistake is voided, never edited. What is
+/// not allocated to a bill is money paid on account.
+model SupplierPayment {
+  id             String                @id @default(uuid())
+  status         SupplierPaymentStatus @default(POSTED)
+  contactId      String
+  date           DateTime              @db.Date
+  amount         Decimal               @db.Decimal(14, 2)
+  /// The bank account the money left: a live 12xx asset account.
+  bankAccountId  String
+  /// What the bank shows, or the supplier's invoice number quoted on the transfer.
+  reference      String?
+  notes          String?
+  journalEntryId String                @unique
+  createdById    String?
+  voidedAt       DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  contact      Contact                 @relation(fields: [contactId], references: [id], onDelete: Restrict)
+  bankAccount  LedgerAccount           @relation("SupplierPaymentBankAccount", fields: [bankAccountId], references: [id], onDelete: Restrict)
+  journalEntry JournalEntry            @relation(fields: [journalEntryId], references: [id], onDelete: Restrict)
+  createdBy    User?                   @relation("SupplierPaymentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  allocations  BillPaymentAllocation[]
+
+  @@index([contactId, date])
+  @@index([status, date])
+  @@map("supplier_payments")
+}
+
+/// Part of a supplier payment applied to a bill. Never deleted: a void sets
+/// `releasedOn`, so aged creditors as at an earlier date still sees it.
+model BillPaymentAllocation {
+  id          String    @id @default(uuid())
+  paymentId   String
+  billId      String
+  amount      Decimal   @db.Decimal(14, 2)
+  date        DateTime  @db.Date
+  releasedOn  DateTime? @db.Date
+  createdById String?
+  createdAt   DateTime  @default(now())
+
+  payment   SupplierPayment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  bill      Bill            @relation(fields: [billId], references: [id], onDelete: Restrict)
+  createdBy User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([paymentId])
+  @@index([billId])
+  @@map("bill_payment_allocations")
+}
+
 /// The supplier's document as received — a PDF or a photo. Held in the
 /// database so it is in the encrypted backups with the bill it supports. Only
 /// a draft's attachments can be removed; once the bill is approved they are
@@ -802,27 +864,27 @@ model BillAttachment {
 /// money is booked to. Holds the details a statement file is checked against
 /// and the import profile that reads that bank's files.
 model BankAccount {
-  id              String   @id @default(uuid())
-  name            String
-  ledgerAccountId String   @unique
+  id               String   @id @default(uuid())
+  name             String
+  ledgerAccountId  String   @unique
   /// Six digits, no dashes: "309950".
-  sortCode        String
+  sortCode         String
   /// Eight digits, **sealed** (`v1.<keyId>…`, see src/lib/accounting/bank-numbers.ts); a row
   /// not yet converted by scripts/encrypt-bank-numbers.ts still holds the plain digits.
-  accountNumber   String
+  accountNumber    String
   /// Keyed blind index of sort code + number (`<keyId>:<hex>`): what "no duplicate account"
   /// is enforced on, since two encryptions of one number never match. Null on legacy rows.
-  accountNumberIdx String? @unique
+  accountNumberIdx String?  @unique
   /// How to read this bank's statement files: column names, date and number
   /// format. Saved from the last successful import; null uses the Lloyds layout.
-  importProfile   Json?
-  isArchived      Boolean  @default(false)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  importProfile    Json?
+  isArchived       Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  ledgerAccount LedgerAccount     @relation(fields: [ledgerAccountId], references: [id], onDelete: Restrict)
-  imports       StatementImport[]
-  lines         StatementLine[]
+  ledgerAccount   LedgerAccount        @relation(fields: [ledgerAccountId], references: [id], onDelete: Restrict)
+  imports         StatementImport[]
+  lines           StatementLine[]
   reconciliations BankReconciliation[]
 
   @@map("bank_accounts")
@@ -870,28 +932,28 @@ model StatementImport {
 /// reconciliation (Phase 6) matches it to the books. Fixed once imported;
 /// an unreconciled import can be undone as a whole.
 model StatementLine {
-  id            String    @id @default(uuid())
-  bankAccountId String
-  importId      String
-  date          DateTime  @db.Date
+  id               String    @id @default(uuid())
+  bankAccountId    String
+  importId         String
+  date             DateTime  @db.Date
   /// The bank's own code: DEB, FPI, DD, BGC…
-  type          String?
-  description   String
+  type             String?
+  description      String
   /// Signed pence as pounds: money in is positive, money out negative.
-  amount        Decimal   @db.Decimal(14, 2)
+  amount           Decimal   @db.Decimal(14, 2)
   /// The running balance the bank printed after this line, if it did.
-  balance       Decimal?  @db.Decimal(14, 2)
+  balance          Decimal?  @db.Decimal(14, 2)
   /// Order within the account, oldest first; ties broken by the file.
-  sequence      Int
+  sequence         Int
   /// SHA-256 of account, date, amount, description and balance (or the
   /// line's occurrence within its file): the same line imported twice
   /// collides here.
-  fingerprint   String
+  fingerprint      String
   /// Set by reconciliation (Phase 6). A reconciled line cannot be undone.
-  reconciledAt  DateTime?
+  reconciledAt     DateTime?
   /// The reconciliation it belongs to; set and cleared with reconciledAt.
   reconciliationId String?
-  createdAt     DateTime  @default(now())
+  createdAt        DateTime  @default(now())
 
   bankAccount    BankAccount         @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
   import         StatementImport     @relation(fields: [importId], references: [id], onDelete: Restrict)
@@ -1007,7 +1069,7 @@ model Account {
   scope             String?
   id_token          String? @db.Text
   session_state     String?
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
   @@map("accounts")
@@ -1033,57 +1095,59 @@ model VerificationToken {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String
-  password  String?
-  role      UserRole @default(CONTRIBUTOR)
-  avatarUrl String?
-  isActive  Boolean  @default(true)
+  id                 String          @id @default(uuid())
+  email              String          @unique
+  name               String
+  password           String?
+  role               UserRole        @default(CONTRIBUTOR)
+  avatarUrl          String?
+  isActive           Boolean         @default(true)
   /// Copied into the session token at sign-in; rotated when role, active flag
   /// or password change, so existing sessions stop working at once.
-  securityStamp String @default(uuid())
+  securityStamp      String          @default(uuid())
   /// An admin chose this user's password; they must replace it before anything else.
-  mustChangePassword Boolean @default(false)
+  mustChangePassword Boolean         @default(false)
   /// AES-GCM envelope (src/lib/crypto.ts) of the authenticator secret. With
   /// totpEnabledAt null it is a pending enrolment; set, it is live.
-  totpSecretEnc    String?
-  totpEnabledAt    DateTime?
+  totpSecretEnc      String?
+  totpEnabledAt      DateTime?
   /// The 30-second step of the last accepted code: a code for an earlier or
   /// equal step is refused, so an intercepted code can't be replayed.
-  totpLastUsedStep Int?
+  totpLastUsedStep   Int?
   /// The project opened when no other is chosen (see src/lib/current-project.ts).
-  defaultProjectId String?
-  defaultProject   Project? @relation("UserDefaultProject", fields: [defaultProjectId], references: [id], onDelete: SetNull)
+  defaultProjectId   String?
+  defaultProject     Project?        @relation("UserDefaultProject", fields: [defaultProjectId], references: [id], onDelete: SetNull)
   projectMemberships ProjectMember[] @relation("MemberUser")
   membershipsAdded   ProjectMember[] @relation("MemberAddedBy")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
 
-  accounts        Account[]
-  sessions        Session[]
-  taskAssignments TaskAssignment[]
-  resources       Resource[]
-  createdProjects Project[]        @relation("ProjectCreator")
-  livingLabCosts  LivingLabCost[]
-  cashTransactions CashTransaction[] @relation("CashTransactionCreator")
-  journalsCreated  JournalEntry[]    @relation("JournalCreator")
-  journalsPosted   JournalEntry[]    @relation("JournalPoster")
-  invoicesCreated  Invoice[]         @relation("InvoiceCreator")
-  invoicesApproved Invoice[]         @relation("InvoiceApprover")
-  creditNotesCreated  CreditNote[]       @relation("CreditNoteCreator")
-  creditNotesApproved CreditNote[]       @relation("CreditNoteApprover")
-  creditAllocations   CreditAllocation[]
-  customerPayments    CustomerPayment[]  @relation("PaymentCreator")
-  statementImports    StatementImport[]  @relation("StatementImporter")
-  reconciliations     BankReconciliation[]
-  statementUndos      StatementImport[]  @relation("StatementUndoer")
-  paymentAllocations  PaymentAllocation[]
-  billsCreated        Bill[]             @relation("BillCreator")
-  billsApproved       Bill[]             @relation("BillApprover")
-  billAttachments     BillAttachment[]   @relation("BillAttachmentUploader")
-  recoveryCodes       RecoveryCode[]
-  stepUps             StepUpVerification[]
+  accounts               Account[]
+  sessions               Session[]
+  taskAssignments        TaskAssignment[]
+  resources              Resource[]
+  createdProjects        Project[]               @relation("ProjectCreator")
+  livingLabCosts         LivingLabCost[]
+  cashTransactions       CashTransaction[]       @relation("CashTransactionCreator")
+  journalsCreated        JournalEntry[]          @relation("JournalCreator")
+  journalsPosted         JournalEntry[]          @relation("JournalPoster")
+  invoicesCreated        Invoice[]               @relation("InvoiceCreator")
+  invoicesApproved       Invoice[]               @relation("InvoiceApprover")
+  creditNotesCreated     CreditNote[]            @relation("CreditNoteCreator")
+  creditNotesApproved    CreditNote[]            @relation("CreditNoteApprover")
+  creditAllocations      CreditAllocation[]
+  customerPayments       CustomerPayment[]       @relation("PaymentCreator")
+  statementImports       StatementImport[]       @relation("StatementImporter")
+  reconciliations        BankReconciliation[]
+  statementUndos         StatementImport[]       @relation("StatementUndoer")
+  paymentAllocations     PaymentAllocation[]
+  billsCreated           Bill[]                  @relation("BillCreator")
+  billsApproved          Bill[]                  @relation("BillApprover")
+  billAttachments        BillAttachment[]        @relation("BillAttachmentUploader")
+  supplierPayments       SupplierPayment[]       @relation("SupplierPaymentCreator")
+  billPaymentAllocations BillPaymentAllocation[]
+  recoveryCodes          RecoveryCode[]
+  stepUps                StepUpVerification[]
 
   @@index([role])
   @@index([isActive])
@@ -1123,33 +1187,33 @@ model StepUpVerification {
 }
 
 model Project {
-  id          String    @id @default(uuid())
-  name        String
-  description String?
-  startDate   DateTime?
-  endDate     DateTime?
-  logoUrl     String?
-  createdBy   String
-  createdAt   DateTime  @default(now())
+  id              String    @id @default(uuid())
+  name            String
+  description     String?
+  startDate       DateTime?
+  endDate         DateTime?
+  logoUrl         String?
+  createdBy       String
+  createdAt       DateTime  @default(now())
   // Manual adjustment for spend that predates or falls outside Task/Living
   // Lab cost tracking — e.g. money spent before this system was in use.
   // Added into the funding runway calc alongside tracked actuals.
-  historicalSpend Decimal @default(0) @db.Decimal(12, 2)
+  historicalSpend Decimal   @default(0) @db.Decimal(12, 2)
   /// Archived projects leave the switcher and the portfolio totals but keep
   /// all their data; archive, never delete, once a project holds money.
-  archivedAt  DateTime?
-  archivedBy  String?
+  archivedAt      DateTime?
+  archivedBy      String?
 
-  creator        User            @relation("ProjectCreator", fields: [createdBy], references: [id])
-  defaultFor     User[]          @relation("UserDefaultProject")
-  members        ProjectMember[]
-  fundingRecords FundingRecord[]
-  livingLabs     LivingLab[]
-  phases         Phase[]
-  tags           Tag[]
-  milestones     Milestone[]
-  tasks          Task[]
-  resources      Resource[]
+  creator                User                    @relation("ProjectCreator", fields: [createdBy], references: [id])
+  defaultFor             User[]                  @relation("UserDefaultProject")
+  members                ProjectMember[]
+  fundingRecords         FundingRecord[]
+  livingLabs             LivingLab[]
+  phases                 Phase[]
+  tags                   Tag[]
+  milestones             Milestone[]
+  tasks                  Task[]
+  resources              Resource[]
   customFieldDefinitions CustomFieldDefinition[]
   cashTransactions       CashTransaction[]
 
@@ -1189,9 +1253,9 @@ model Phase {
   endDate    DateTime?
   color      String?
 
-  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  milestones     Milestone[]
-  fundingRecords FundingRecord[]
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  milestones       Milestone[]
+  fundingRecords   FundingRecord[]
   cashTransactions CashTransaction[]
 
   @@index([projectId])
@@ -1204,10 +1268,10 @@ model Tag {
   name      String
   color     String @default("#6366f1")
 
-  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  taskTags        TaskTag[]
-  milestoneTags  MilestoneTag[]
-  resourceTags   ResourceTag[]
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  taskTags      TaskTag[]
+  milestoneTags MilestoneTag[]
+  resourceTags  ResourceTag[]
 
   @@unique([projectId, name])
   @@index([projectId])
@@ -1250,34 +1314,34 @@ model Milestone {
 }
 
 model Task {
-  id           String     @id @default(uuid())
-  milestoneId  String
-  projectId    String
-  code         String
-  title        String
-  description  String?
-  startDate    DateTime
-  dueDate      DateTime
-  percentDone  Int        @default(0)
-  status       TaskStatus @default(BACKLOG)
-  priority     Priority   @default(MED)
-  estBudget    Decimal?   @db.Decimal(12, 2)
-  actualSpend  Decimal?   @db.Decimal(12, 2)
-  extCosts     Decimal?   @db.Decimal(12, 2)
+  id             String        @id @default(uuid())
+  milestoneId    String
+  projectId      String
+  code           String
+  title          String
+  description    String?
+  startDate      DateTime
+  dueDate        DateTime
+  percentDone    Int           @default(0)
+  status         TaskStatus    @default(BACKLOG)
+  priority       Priority      @default(MED)
+  estBudget      Decimal?      @db.Decimal(12, 2)
+  actualSpend    Decimal?      @db.Decimal(12, 2)
+  extCosts       Decimal?      @db.Decimal(12, 2)
   costCategoryId String?
-  costCategory  CostCategory? @relation(fields: [costCategoryId], references: [id], onDelete: SetNull)
-  notes        String?    @db.Text
-  orderIndex   Int        @default(0)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-  resourceId      String?
+  costCategory   CostCategory? @relation(fields: [costCategoryId], references: [id], onDelete: SetNull)
+  notes          String?       @db.Text
+  orderIndex     Int           @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  resourceId     String?
 
   milestone       Milestone        @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
   project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   taskAssignments TaskAssignment[]
   taskTags        TaskTag[]
   livingLabCosts  LivingLabCost[]
-  resource        Resource? @relation(fields: [resourceId], references: [id])
+  resource        Resource?        @relation(fields: [resourceId], references: [id])
 
   @@unique([projectId, code])
   @@index([milestoneId])
@@ -1457,18 +1521,18 @@ model LivingLab {
 }
 
 model LivingLabCost {
-  id          String    @id @default(uuid())
-  labId       String
-  taskId      String?
-  milestoneId String?
+  id             String        @id @default(uuid())
+  labId          String
+  taskId         String?
+  milestoneId    String?
   costCategoryId String?
-  costCategory  CostCategory? @relation(fields: [costCategoryId], references: [id], onDelete: SetNull)
-  ownerId     String?
-  estBudget   Decimal   @default(0) @db.Decimal(12, 2)
-  actualSpend Decimal   @default(0) @db.Decimal(12, 2)
-  startDate   DateTime?
-  endDate     DateTime?
-  notes       String?
+  costCategory   CostCategory? @relation(fields: [costCategoryId], references: [id], onDelete: SetNull)
+  ownerId        String?
+  estBudget      Decimal       @default(0) @db.Decimal(12, 2)
+  actualSpend    Decimal       @default(0) @db.Decimal(12, 2)
+  startDate      DateTime?
+  endDate        DateTime?
+  notes          String?
 
   lab   LivingLab @relation(fields: [labId], references: [id], onDelete: Cascade)
   task  Task?     @relation(fields: [taskId], references: [id])
@@ -1484,16 +1548,16 @@ model CustomFieldDefinition {
   projectId    String
   module       CustomFieldModule
   name         String
-  fieldType    String            // TEXT, NUMBER, DATE, SELECT, MULTI_SELECT, BOOLEAN
-  options      Json?             // e.g. { choices: ["A","B"] }
+  fieldType    String // TEXT, NUMBER, DATE, SELECT, MULTI_SELECT, BOOLEAN
+  options      Json? // e.g. { choices: ["A","B"] }
   required     Boolean           @default(false)
   defaultValue String?
   orderIndex   Int               @default(0)
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
 
-  project  Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  values   CustomFieldValue[]
+  project Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  values  CustomFieldValue[]
 
   @@unique([projectId, module, name])
   @@index([projectId, module])
@@ -1501,11 +1565,11 @@ model CustomFieldDefinition {
 }
 
 model CustomFieldValue {
-  id           String  @id @default(uuid())
+  id           String    @id @default(uuid())
   definitionId String
   entityId     String
   valueString  String?
-  valueNumber  Decimal? @db.Decimal(15, 4)
+  valueNumber  Decimal?  @db.Decimal(15, 4)
   valueDate    DateTime?
   valueBoolean Boolean?
   valueJson    Json?

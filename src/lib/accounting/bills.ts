@@ -26,6 +26,7 @@ import {
 } from "./bill-attachment";
 import { accountIdForCode, userId } from "./invoices";
 import { postNewJournal, reverseJournal } from "./posting";
+import { settledByBill } from "./supplier-payments";
 import { dueDateFrom, fromMilli, toMilli } from "./sales";
 
 /**
@@ -53,6 +54,17 @@ const withLines = {
 } satisfies Prisma.BillInclude;
 
 export type BillWithLines = Prisma.BillGetPayload<{ include: typeof withLines }>;
+
+/** Everything the bill screen and API show, payments included. */
+export const billDetail = {
+  lines: { orderBy: { lineNumber: "asc" }, include: { account: { select: { code: true, name: true } } } },
+  attachments: { select: attachmentMeta, orderBy: { createdAt: "asc" } },
+  journalEntry: { select: { id: true, number: true } },
+  paymentAllocations: {
+    orderBy: { createdAt: "asc" },
+    include: { payment: { select: { id: true, date: true, reference: true, status: true } } },
+  },
+} satisfies Prisma.BillInclude;
 
 export interface BillInput {
   contactId: string;
@@ -299,6 +311,14 @@ export async function approveBill(tx: Tx, id: string, actor: AuditActor) {
 export async function voidBill(tx: Tx, id: string, reason: string, actor: AuditActor) {
   const existing = await loadBill(tx, id);
   assertTransition(existing.status as BillStatus, "VOID");
+  // Voiding the purchase would leave a payment paying nothing.
+  if (((await settledByBill(tx, [id])).get(id) ?? 0) > 0) {
+    throw new AccountingError(
+      "BILL_PAID",
+      "This bill has payments allocated to it: void those first",
+      409
+    );
+  }
 
   if (existing.journalEntryId) {
     await reverseJournal(

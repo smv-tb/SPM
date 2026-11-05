@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
 import { serializeBillRow } from "@/lib/accounting/serialize";
+import { billSettlementInclude } from "@/lib/accounting/supplier-payments";
 import { BILL_STATUSES, OPEN_BILL_STATUSES, type BillStatus } from "@/lib/accounting/bill";
 import { calendarDateKey, toLedgerDate } from "@/lib/accounting/dates";
 import { BUSINESS_TIME_ZONE } from "@/lib/constants";
@@ -54,7 +55,7 @@ export default async function BillsPage({
     prisma.bill.groupBy({ by: ["status"], where: base, _count: true }),
     prisma.bill.count({ where: { ...base, status: open, dueDate: { lt: today } } }),
     prisma.bill.findMany({ distinct: ["supplierName"], select: { supplierName: true }, orderBy: { supplierName: "asc" } }),
-    prisma.bill.findMany({ where: { ...base, status: open } }),
+    prisma.bill.findMany({ where: { ...base, status: open }, include: billSettlementInclude }),
   ]);
 
   // A stale page number (a filter narrowed the list) clamps rather than 404s.
@@ -66,7 +67,7 @@ export default async function BillsPage({
     orderBy: [{ issueDate: "desc" }, { createdAt: "desc" }],
     skip: (page - 1) * PAGE_SIZE,
     take: PAGE_SIZE,
-    include: { _count: { select: { attachments: true } } },
+    include: { _count: { select: { attachments: true } }, ...billSettlementInclude },
   });
 
   const todayKey = calendarDateKey(new Date(), BUSINESS_TIME_ZONE);

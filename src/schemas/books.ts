@@ -252,6 +252,34 @@ export const paymentSchema = z.object({
     .default([]),
 });
 
+export const supplierPaymentSchema = z.object({
+  contactId: z.string().uuid("Choose a supplier"),
+  date: dateOnly,
+  /** Pounds, as written; parsed to pence by the route. */
+  amount,
+  /** A 12xx bank account; omitted means 1200. */
+  bankAccountId: z.string().uuid("Invalid account").nullable().optional(),
+  reference: z.string().max(100).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  /**
+   * Money-out statement line this payment is. The line's own date, amount and
+   * bank account are used and the line is reconciled in the same step.
+   */
+  statementLineId: z.string().uuid("Invalid statement line").nullable().optional(),
+  /** Bills to settle, in order; an omitted amount takes what each still owes. */
+  allocations: z
+    .array(z.object({ billId: z.string().uuid("Invalid bill"), amount: amount.optional() }))
+    .max(50)
+    .default([]),
+});
+
+export const billAllocationSchema = z.object({
+  billId: z.string().uuid("Choose a bill"),
+  /** Pounds, as written. Omitted applies as much as the payment and the bill allow. */
+  amount: amount.optional(),
+  date: dateOnly.optional(),
+});
+
 export const refundSchema = z.object({
   source: z.union([
     z.object({ creditNoteId: z.string().uuid("Invalid credit note") }),
@@ -303,6 +331,11 @@ export const reconcileInvoicesSchema = z.object({
   invoiceIds: ids("Invalid invoice"),
 });
 
+export const reconcileBillsSchema = z.object({
+  statementLineId: z.string().uuid("Invalid statement line"),
+  billIds: ids("Invalid bill"),
+});
+
 export const reconcileCreateSchema = z.object({
   statementLineId: z.string().uuid("Invalid statement line"),
   accountId: z.string().uuid("Choose an account"),
@@ -335,4 +368,6 @@ export type CreditNoteRequest = z.infer<typeof creditNoteSchema>;
 export type CreditAllocationRequest = z.infer<typeof creditAllocationSchema>;
 export type PaymentRequest = z.infer<typeof paymentSchema>;
 export type RefundRequest = z.infer<typeof refundSchema>;
+export type SupplierPaymentRequest = z.infer<typeof supplierPaymentSchema>;
+export type BillAllocationRequest = z.infer<typeof billAllocationSchema>;
 export type LockDateInput = z.infer<typeof lockDateSchema>;

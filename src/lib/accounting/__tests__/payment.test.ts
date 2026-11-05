@@ -6,6 +6,7 @@ import {
   isBankAccountCode,
   receiptPostingLines,
   refundPostingLines,
+  supplierPaymentPostingLines,
 } from "@/lib/accounting/payment";
 import { bucketFor, buildAgedDebtors, daysBetween } from "@/lib/accounting/aged-debtors";
 import { allocationAmount } from "@/lib/accounting/credit-note";
@@ -27,7 +28,15 @@ describe("receipt and refund journals", () => {
     ]);
   });
 
+  it("a supplier payment debits trade creditors and credits the bank", () => {
+    expect(supplierPaymentPostingLines(14999, "bank", "creditors")).toEqual([
+      { accountId: "creditors", debit: 14999, credit: 0 },
+      { accountId: "bank", debit: 0, credit: 14999 },
+    ]);
+  });
+
   it("refuses nothing, negatives and fractions of a penny", () => {
+    expect(() => supplierPaymentPostingLines(0, "b", "c")).toThrow(AccountingError);
     expect(() => receiptPostingLines(0, "b", "d")).toThrow(AccountingError);
     expect(() => refundPostingLines(-1, "b", "d")).toThrow(AccountingError);
     expect(() => receiptPostingLines(1.5, "b", "d")).toThrow(AccountingError);
@@ -62,6 +71,12 @@ describe("allocationAmount for a payment", () => {
     expect(() =>
       allocationAmount({ requested: 501, creditRemaining: 500, invoiceDue: 900, source: "the payment" })
     ).toThrow("That is more than the payment has left to allocate");
+  });
+
+  it("names a bill when that is what it settles", () => {
+    expect(() =>
+      allocationAmount({ requested: 901, creditRemaining: 5000, invoiceDue: 900, target: "the bill" })
+    ).toThrow("That is more than the bill still owes");
   });
 });
 

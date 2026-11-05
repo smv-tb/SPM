@@ -44,6 +44,7 @@ svc payment-service.ts
 svc statement-service.ts
 svc reconciliation-service.ts
 svc bill-service.ts
+svc supplier-payment-service.ts
 svc balance-sheet.ts
 svc profit-and-loss.ts
 sql contact-anonymisation.sql

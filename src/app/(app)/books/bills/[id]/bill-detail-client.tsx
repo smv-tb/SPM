@@ -18,13 +18,16 @@ import { formatDate } from "@/lib/utils";
 import { BILL_STATUS_LABEL, isEditable, type BillStatus } from "@/lib/accounting/bill";
 import { MAX_ATTACHMENTS_PER_BILL, formatFileSize } from "@/lib/accounting/bill-attachment";
 import { BillForm, type BillAccountOption, type BillSupplier } from "@/components/books/BillForm";
+import { RecordPaymentDialog } from "@/components/books/PaymentDialogs";
 import type { SerializedBill } from "@/lib/accounting/serialize";
+import type { BankAccountOption } from "@/lib/accounting/bank-accounts";
 import { FileText, Image as ImageIcon, Paperclip, Trash2 } from "lucide-react";
 
 interface Props {
   bill: SerializedBill;
   suppliers: BillSupplier[];
   accounts: BillAccountOption[];
+  bankAccounts: BankAccountOption[];
   canEdit: boolean;
   canApprove: boolean;
 }
@@ -45,11 +48,12 @@ function describeRefusal(payload: { error?: string; problems?: { message: string
   return [payload.error ?? `Request failed (${status})`, ...problems].join(". ");
 }
 
-export function BillDetailClient({ bill, suppliers, accounts, canEdit, canApprove }: Props) {
+export function BillDetailClient({ bill, suppliers, accounts, bankAccounts, canEdit, canApprove }: Props) {
   const router = useRouter();
   const fileInput = useRef<HTMLInputElement>(null);
   const [editing, setEditing] = useState(false);
   const [voiding, setVoiding] = useState(false);
+  const [paying, setPaying] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -58,6 +62,8 @@ export function BillDetailClient({ bill, suppliers, accounts, canEdit, canApprov
   const draft = isEditable(status);
   const title = bill.supplierReference ?? (draft ? "Draft bill" : "Bill");
   const canAttach = canEdit && status !== "VOID" && bill.attachments.length < MAX_ATTACHMENTS_PER_BILL;
+  const canPay = canEdit && (status === "APPROVED" || status === "PART_PAID") && bill.amountDue > 0;
+  const livePayments = bill.payments.filter((p) => !p.releasedOn);
 
   async function act(path: string, body?: unknown) {
     setBusy(true);
@@ -160,6 +166,11 @@ export function BillDetailClient({ bill, suppliers, accounts, canEdit, canApprov
                 Approve
               </Button>
             )}
+            {canPay && (
+              <Button size="sm" disabled={busy} onClick={() => setPaying(true)}>
+                Record payment
+              </Button>
+            )}
           </div>
         }
       />
@@ -223,6 +234,24 @@ export function BillDetailClient({ bill, suppliers, accounts, canEdit, canApprov
                     </td>
                     <td className="px-5 py-3 text-right font-semibold tabular-nums">{formatPence(bill.total)}</td>
                   </tr>
+                  {bill.paid > 0 && (
+                    <>
+                      <tr>
+                        <td className="px-5 py-2 text-muted-foreground" colSpan={4}>
+                          Paid
+                        </td>
+                        <td className="px-5 py-2 text-right tabular-nums text-muted-foreground">
+                          -{formatPence(bill.paid)}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-5 py-3 font-semibold" colSpan={4}>
+                          Still owed
+                        </td>
+                        <td className="px-5 py-3 text-right font-semibold tabular-nums">{formatPence(bill.amountDue)}</td>
+                      </tr>
+                    </>
+                  )}
                 </tfoot>
               </table>
             </CardContent>
@@ -260,6 +289,30 @@ export function BillDetailClient({ bill, suppliers, accounts, canEdit, canApprov
                 )}
               </CardContent>
             </Card>
+
+            {bill.payments.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Payments</CardTitle>
+                </CardHeader>
+                <CardContent className="p-5 pt-0 text-sm">
+                  <ul className="space-y-2">
+                    {bill.payments.map((p) => (
+                      <li key={p.id ?? p.paymentId} className={`flex items-center gap-2 ${p.releasedOn ? "text-muted-foreground line-through" : ""}`}>
+                        <Link href={`/books/supplier-payments/${p.paymentId}`} className="text-primary hover:underline">
+                          {formatDate(p.paymentDate)}
+                        </Link>
+                        <span className="min-w-0 truncate text-muted-foreground">{p.reference ?? ""}</span>
+                        <span className="ml-auto tabular-nums">{formatPence(p.amount)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {bill.payments.some((p) => p.releasedOn) && (
+                    <p className="mt-2 text-xs text-muted-foreground">Struck through: the payment was voided.</p>
+                  )}
+                </CardContent>
+              </Card>
+            )}
 
             <Card>
               <CardHeader>
@@ -358,9 +411,21 @@ export function BillDetailClient({ bill, suppliers, accounts, canEdit, canApprov
           <p className="text-sm text-muted-foreground">
             An approved bill cannot be edited — void it and enter it again, so the books keep both the purchase and its
             cancellation.
+            {livePayments.length > 0 && " It has payments against it: void those first."}
           </p>
         )}
       </main>
+
+      {canPay && (
+        <RecordPaymentDialog
+          open={paying}
+          onOpenChange={setPaying}
+          side="out"
+          bankAccounts={bankAccounts}
+          invoice={{ id: bill.id, number: bill.supplierReference, contactId: bill.contactId, amountDue: bill.amountDue }}
+          onRecorded={() => router.refresh()}
+        />
+      )}
 
       <Dialog open={voiding} onOpenChange={setVoiding}>
         <DialogContent>

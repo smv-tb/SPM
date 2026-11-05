@@ -129,7 +129,7 @@ export async function exportContactData(db: Db, contactId: string) {
   const contact = await db.contact.findUnique({ where: { id: contactId } });
   if (!contact) throw new AccountingError("NOT_FOUND", "Contact not found", 404);
 
-  const [invoices, creditNotes, payments, bills, audit] = await Promise.all([
+  const [invoices, creditNotes, payments, bills, supplierPayments, audit] = await Promise.all([
     db.invoice.findMany({ where: { contactId }, include: { lines: true }, orderBy: { issueDate: "asc" } }),
     db.creditNote.findMany({ where: { contactId }, include: { lines: true }, orderBy: { issueDate: "asc" } }),
     db.customerPayment.findMany({ where: { contactId }, orderBy: { date: "asc" } }),
@@ -142,6 +142,7 @@ export async function exportContactData(db: Db, contactId: string) {
       },
       orderBy: { issueDate: "asc" },
     }),
+    db.supplierPayment.findMany({ where: { contactId }, orderBy: { date: "asc" } }),
     db.auditLog.findMany({
       where: { entityType: "Contact", entityId: contactId },
       select: { occurredAt: true, action: true, before: true, after: true, reason: true },
@@ -157,6 +158,7 @@ export async function exportContactData(db: Db, contactId: string) {
     creditNotes: stripInternal(creditNotes),
     payments: stripInternal(payments),
     bills: stripInternal(bills),
+    supplierPayments: stripInternal(supplierPayments),
     auditTrail: toAuditJson(audit),
   };
 }

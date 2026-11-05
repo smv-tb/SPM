@@ -88,8 +88,10 @@ export function allocationAmount(options: {
   invoiceDue: Pence;
   /** What the money comes from, for the refusal: "the credit note", "the payment". */
   source?: string;
+  /** What it settles, for the refusal: "the invoice", "the bill". */
+  target?: string;
 }): Pence {
-  const { requested, creditRemaining, invoiceDue, source = "the credit note" } = options;
+  const { requested, creditRemaining, invoiceDue, source = "the credit note", target = "the invoice" } = options;
   const most = Math.min(creditRemaining, invoiceDue);
   if (requested === undefined) return most;
   if (!Number.isInteger(requested) || requested <= 0) {
@@ -103,7 +105,7 @@ export function allocationAmount(options: {
     );
   }
   if (requested > invoiceDue) {
-    throw new AccountingError("OVER_ALLOCATED", "That is more than the invoice still owes", 422);
+    throw new AccountingError("OVER_ALLOCATED", `That is more than ${target} still owes`, 422);
   }
   return requested;
 }

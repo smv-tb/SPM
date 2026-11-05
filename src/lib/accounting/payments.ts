@@ -72,7 +72,7 @@ async function loadCustomer(tx: Tx, contactId: string) {
 }
 
 /** The account money moved through: the one asked for, or 1200. */
-async function resolveBankAccount(tx: Tx, bankAccountId?: string | null) {
+export async function resolveBankAccount(tx: Tx, bankAccountId?: string | null) {
   const account = bankAccountId
     ? await tx.ledgerAccount.findUnique({ where: { id: bankAccountId } })
     : await tx.ledgerAccount.findUnique({ where: { code: SYSTEM_ACCOUNT_CODES.BANK } });
@@ -90,7 +90,7 @@ async function resolveBankAccount(tx: Tx, bankAccountId?: string | null) {
   return account;
 }
 
-function today(): Date {
+export function today(): Date {
   return toLedgerDate(calendarDateKey(new Date(), BUSINESS_TIME_ZONE));
 }
 

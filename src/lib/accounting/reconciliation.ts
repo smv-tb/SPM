@@ -11,23 +11,28 @@ import {
   suggestMatches,
   type BookLineIn,
   type Candidate,
+  type OpenBillIn,
   type OpenInvoiceIn,
   type StatementLineIn,
   type Suggestion,
 } from "./reconcile-match";
 import { settledByInvoice } from "./settlement";
+import { recordSupplierPayment, settledByBill } from "./supplier-payments";
 
 /**
  * The only code that reconciles: links bank statement lines to the posted
  * journal lines on that bank's ledger account that are the same money. A
  * reconciliation changes nothing in the ledger — but matching a line to an
- * open invoice records the payment first, and "create" posts the journal
- * the line needs, so those two go through the posting and payment services
- * in the same transaction.
+ * open invoice (or money out to an open bill) records the payment first, and
+ * "create" posts the journal the line needs, so those go through the posting
+ * and payment services in the same transaction.
  */
 
 type Tx = Prisma.TransactionClient;
-type Reader = Pick<Tx, "bankAccount" | "statementLine" | "journalLine" | "invoice" | "creditAllocation" | "paymentAllocation">;
+type Reader = Pick<
+  Tx,
+  "bankAccount" | "statementLine" | "journalLine" | "invoice" | "creditAllocation" | "paymentAllocation" | "bill" | "billPaymentAllocation"
+>;
 
 async function loadAccount(db: Pick<Tx, "bankAccount">, bankAccountId: string) {
   const account = await db.bankAccount.findUnique({
@@ -60,6 +65,8 @@ export interface ReconcileView {
   suggestions: Suggestion[];
   /** Invoices still owed, so money in can be tagged to them by hand. Oldest first. */
   openInvoices: { id: string; number: string; contactId: string; contactName: string; amountDue: Pence; issueDate: string }[];
+  /** Bills still owed, so money out can be tagged to them by hand. Oldest first. */
+  openBills: OpenBillIn[];
   /** In the books on this account but not (yet) on the statement. */
   bookOnly: { journalLineId: string; entryId: string; journalNumber: number | null; date: string; amount: Pence; label: string }[];
 }
@@ -67,7 +74,7 @@ export interface ReconcileView {
 /** Everything the reconcile screen needs: lines, suggestions and loose book entries. */
 export async function reconcileView(db: Reader, bankAccountId: string): Promise<ReconcileView> {
   const account = await loadAccount(db, bankAccountId);
-  const [statement, book, invoices] = await Promise.all([
+  const [statement, book, invoices, bills] = await Promise.all([
     db.statementLine.findMany({
       where: { bankAccountId, reconciledAt: null },
       orderBy: [{ date: "asc" }, { sequence: "asc" }],
@@ -77,8 +84,13 @@ export async function reconcileView(db: Reader, bankAccountId: string): Promise<
       where: { status: { in: ["APPROVED", "SENT", "PART_PAID"] }, number: { not: null } },
       include: { contact: { select: { name: true } } },
     }),
+    db.bill.findMany({
+      where: { status: { in: ["APPROVED", "PART_PAID"] } },
+      include: { contact: { select: { name: true } } },
+    }),
   ]);
   const settled = (await settledByInvoice(db, invoices.map((i) => i.id))).settled;
+  const paidBills = await settledByBill(db, bills.map((b) => b.id));
 
   const lines = statement.map((l) => ({
     id: l.id,
@@ -105,13 +117,25 @@ export async function reconcileView(db: Reader, bankAccountId: string): Promise<
       issueDate: ledgerDateKey(i.issueDate),
     }))
     .filter((i) => i.amountDue > 0);
+  const owed: OpenBillIn[] = bills
+    .map((b) => ({
+      id: b.id,
+      reference: b.supplierReference,
+      contactId: b.contactId,
+      contactName: b.contact.name,
+      amountDue: toPence(b.total) - (paidBills.get(b.id) ?? 0),
+      issueDate: ledgerDateKey(b.issueDate),
+    }))
+    .filter((b) => b.amountDue > 0)
+    .sort((a, b) => a.issueDate.localeCompare(b.issueDate) || a.contactName.localeCompare(b.contactName));
 
   return {
     lines,
-    suggestions: suggestMatches(lines, books, open),
+    suggestions: suggestMatches(lines, books, open, owed),
     openInvoices: open
       .map((i) => ({ ...i }))
       .sort((a, b) => a.issueDate.localeCompare(b.issueDate) || a.number.localeCompare(b.number)),
+    openBills: owed,
     bookOnly: book.map((l) => ({
       journalLineId: l.id,
       entryId: l.entry.id,
@@ -298,11 +322,101 @@ export async function reconcileWithReceipt(
 }
 
 /**
+ * Money out that pays open bills: records the supplier payment (dated on the
+ * statement day, from this bank account, settling the bills in order) and
+ * reconciles the line against it, all at once.
+ */
+export async function reconcileWithBills(
+  tx: Tx,
+  input: { bankAccountId: string; statementLineId: string; billIds: string[]; method?: "MANUAL" | "AUTO" },
+  actor: AuditActor
+) {
+  if (input.billIds.length === 0) throw new AccountingError("NOTHING_TO_MATCH", "Choose the bills it pays", 422);
+  const bills = await tx.bill.findMany({ where: { id: { in: input.billIds } } });
+  const contacts = new Set(bills.map((b) => b.contactId));
+  if (bills.length !== input.billIds.length || contacts.size !== 1) {
+    throw new AccountingError("WRONG_SUPPLIER", "One payment pays bills of one supplier", 422);
+  }
+  return reconcileWithSupplierPayment(
+    tx,
+    {
+      bankAccountId: input.bankAccountId,
+      statementLineId: input.statementLineId,
+      contactId: [...contacts][0],
+      // In the order chosen; anything beyond what they owe is paid on account.
+      allocations: input.billIds.map((billId) => ({ billId })),
+      method: input.method,
+    },
+    actor
+  );
+}
+
+/**
+ * Records a payment to a supplier from an unreconciled money-out statement
+ * line — date, amount and bank account are the line's — and reconciles the
+ * line against it. With no allocations the money is paid on account.
+ */
+export async function reconcileWithSupplierPayment(
+  tx: Tx,
+  input: {
+    bankAccountId?: string;
+    statementLineId: string;
+    contactId: string;
+    allocations?: { billId: string; amount?: number }[];
+    reference?: string | null;
+    notes?: string | null;
+    method?: "MANUAL" | "AUTO";
+  },
+  actor: AuditActor
+) {
+  let bankAccountId = input.bankAccountId;
+  if (!bankAccountId) {
+    const found = await tx.statementLine.findUnique({
+      where: { id: input.statementLineId },
+      select: { bankAccountId: true },
+    });
+    if (!found) throw new AccountingError("NOT_FOUND", "Statement line not found", 404);
+    bankAccountId = found.bankAccountId;
+  }
+  await lockAccount(tx, bankAccountId);
+  const account = await loadAccount(tx, bankAccountId);
+  const line = await tx.statementLine.findUnique({ where: { id: input.statementLineId } });
+  if (!line || line.bankAccountId !== account.id) throw new AccountingError("NOT_FOUND", "Statement line not found", 404);
+  if (line.reconciledAt) throw new AccountingError("ALREADY_RECONCILED", "That line is already reconciled", 409);
+  const amount = -toPence(line.amount);
+  if (amount <= 0) throw new AccountingError("NOT_MONEY_OUT", "Only money out can pay a bill", 422);
+
+  const payment = await recordSupplierPayment(
+    tx,
+    {
+      contactId: input.contactId,
+      date: line.date,
+      amount,
+      bankAccountId: account.ledgerAccountId,
+      reference: input.reference?.trim() || line.description.slice(0, 100),
+      notes: input.notes?.trim() || "Recorded from the bank statement",
+      allocations: input.allocations,
+    },
+    actor
+  );
+  const bankLine = await tx.journalLine.findFirstOrThrow({
+    where: { entryId: payment.journalEntryId, accountId: account.ledgerAccountId },
+  });
+  const reconciliation = await reconcile(
+    tx,
+    { bankAccountId: account.id, statementLineIds: [line.id], journalLineIds: [bankLine.id], method: input.method },
+    actor
+  );
+  return { reconciliation, supplierPaymentId: payment.id };
+}
+
+/**
  * A statement line with nothing in the books yet — bank charges, a card
  * purchase, HMRC: posts it to the chosen account on the statement date and
  * reconciles it. Money out debits the account, money in credits it. Trade
- * debtors is refused (use an invoice or a payment, so the customer's account
- * stays right), and so is the bank's own account.
+ * debtors and trade creditors are refused (use an invoice or a bill and its
+ * payment, so the customer's or supplier's account stays right), and so is
+ * the bank's own account.
  */
 export async function createAndReconcile(
   tx: Tx,
@@ -324,6 +438,13 @@ export async function createAndReconcile(
     throw new AccountingError(
       "USE_INVOICES",
       "Money from customers goes through their invoices: match it to an invoice or record a payment",
+      422
+    );
+  }
+  if (target.code === SYSTEM_ACCOUNT_CODES.TRADE_CREDITORS) {
+    throw new AccountingError(
+      "USE_BILLS",
+      "Money to suppliers goes through their bills: match it to a bill or record a supplier payment",
       422
     );
   }
@@ -436,6 +557,13 @@ export async function autoReconcile(tx: Tx, bankAccountId: string, actor: AuditA
         { bankAccountId, statementLineIds: [suggestion.statementLineId], journalLineIds: pick.journalLineIds, method: "AUTO" },
         actor
       );
+    } else if (pick.kind === "BILL") {
+      await reconcileWithBills(
+        tx,
+        { bankAccountId, statementLineId: suggestion.statementLineId, billIds: pick.billIds, method: "AUTO" },
+        actor
+      );
+      paymentsRecorded++;
     } else {
       await reconcileWithInvoices(
         tx,

@@ -514,12 +514,19 @@ interface BillRow {
   attachments?: BillAttachmentRow[];
   journalEntry?: { id: string; number: number | null } | null;
   _count?: { attachments: number };
+  /** Released ones are skipped when totalling; the detail view lists them all. */
+  paymentAllocations?: (AllocationRow & {
+    id?: string;
+    date?: Date;
+    payment?: { id: string; date: Date; reference: string | null; status: string };
+  })[];
 }
 
 /** The row shown in a list: no lines, so a page of 50 stays small. */
 export function serializeBillRow(bill: BillRow) {
   const total = toPence(bill.total);
   const open = bill.status !== "DRAFT" && bill.status !== "VOID";
+  const paid = sumAllocations(bill.paymentAllocations);
   return {
     id: bill.id,
     status: bill.status,
@@ -529,8 +536,9 @@ export function serializeBillRow(bill: BillRow) {
     issueDate: ledgerDateKey(bill.issueDate),
     dueDate: ledgerDateKey(bill.dueDate),
     total,
+    paid,
     /** What we still owe the supplier; nothing on a draft or a void. */
-    amountDue: open ? total : 0,
+    amountDue: open ? Math.max(0, total - paid) : 0,
     attachmentCount: bill._count?.attachments ?? bill.attachments?.length ?? 0,
   };
 }
@@ -558,6 +566,21 @@ export function serializeBill(bill: BillRow) {
       accountCode: line.account?.code ?? null,
       accountName: line.account?.name ?? null,
     })),
+    payments: (bill.paymentAllocations ?? []).flatMap((a) =>
+      a.payment
+        ? [
+            {
+              id: a.id ?? null,
+              amount: toPence(a.amount),
+              date: a.date ? ledgerDateKey(a.date) : null,
+              releasedOn: a.releasedOn ? ledgerDateKey(a.releasedOn) : null,
+              paymentId: a.payment.id,
+              paymentDate: ledgerDateKey(a.payment.date),
+              reference: a.payment.reference,
+            },
+          ]
+        : []
+    ),
     attachments: (bill.attachments ?? []).map((a) => ({
       id: a.id,
       fileName: a.fileName,
@@ -569,3 +592,68 @@ export function serializeBill(bill: BillRow) {
 }
 
 export type SerializedBill = ReturnType<typeof serializeBill>;
+
+interface SupplierPaymentRow {
+  id: string;
+  status: string;
+  contactId: string;
+  date: Date;
+  amount: Money;
+  bankAccountId: string;
+  reference: string | null;
+  notes: string | null;
+  journalEntryId: string;
+  voidedAt: Date | null;
+  createdAt: Date;
+  contact?: { id: string; name: string } | null;
+  bankAccount?: { id: string; code: string; name: string } | null;
+  journalEntry?: { id: string; number: number | null } | null;
+  allocations?: {
+    id?: string;
+    amount: Money;
+    date?: Date;
+    releasedOn?: Date | null;
+    bill?: { id: string; supplierReference: string | null; supplierName: string } | null;
+  }[];
+}
+
+export function serializeSupplierPaymentRow(payment: SupplierPaymentRow) {
+  const amount = toPence(payment.amount);
+  const allocated = sumAllocations(payment.allocations);
+  return {
+    id: payment.id,
+    status: payment.status,
+    contactId: payment.contactId,
+    contactName: payment.contact?.name ?? null,
+    date: ledgerDateKey(payment.date),
+    amount,
+    reference: payment.reference,
+    allocated,
+    /** A posted payment's money not yet applied to a bill: paid on account. */
+    remaining: payment.status === "POSTED" ? Math.max(0, amount - allocated) : 0,
+  };
+}
+
+export function serializeSupplierPayment(payment: SupplierPaymentRow) {
+  return {
+    ...serializeSupplierPaymentRow(payment),
+    notes: payment.notes,
+    bankAccountId: payment.bankAccountId,
+    bankAccountCode: payment.bankAccount?.code ?? null,
+    bankAccountName: payment.bankAccount?.name ?? null,
+    journalEntryId: payment.journalEntryId,
+    journalNumber: payment.journalEntry?.number ?? null,
+    voidedAt: payment.voidedAt?.toISOString() ?? null,
+    createdAt: payment.createdAt.toISOString(),
+    allocations: (payment.allocations ?? []).map((a) => ({
+      id: a.id ?? null,
+      amount: toPence(a.amount),
+      date: a.date ? ledgerDateKey(a.date) : null,
+      billId: a.bill?.id ?? null,
+      billReference: a.bill?.supplierReference ?? null,
+      releasedOn: a.releasedOn ? ledgerDateKey(a.releasedOn) : null,
+    })),
+  };
+}
+
+export type SerializedSupplierPayment = ReturnType<typeof serializeSupplierPayment>;

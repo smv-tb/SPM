@@ -49,7 +49,7 @@ export default async function BooksPage() {
     prisma.statementLine.count({ where: { reconciledAt: null } }),
     prisma.bill.findMany({
       where: { status: { in: [...OPEN_BILL_STATUSES] } },
-      select: { total: true, dueDate: true },
+      select: { total: true, dueDate: true, paymentAllocations: { where: { releasedOn: null }, select: { amount: true } } },
     }),
     prisma.bill.count({ where: { status: "DRAFT" } }),
   ]);
@@ -99,8 +99,11 @@ export default async function BooksPage() {
   );
   const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-  // What we owe suppliers. Until supplier payments arrive, an open bill is owed in full.
-  const owedToSuppliers = openBills.reduce((sum, bill) => sum + toPence(bill.total), 0);
+  // What we owe suppliers, after what has been paid against each bill.
+  const owedToSuppliers = openBills.reduce(
+    (sum, bill) => sum + toPence(bill.total) - allocated(bill.paymentAllocations),
+    0
+  );
   const overdueBills = openBills.filter((b) => ledgerDateKey(b.dueDate) < todayKey);
 
   // Most urgent first; an item with nothing to do shows as clear rather than disappearing.

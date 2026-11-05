@@ -4,6 +4,7 @@ import {
   assertTransition,
   billLabel,
   billPostingLines,
+  billSettledStatus,
   canTransition,
   isBillAccount,
   isEditable,
@@ -143,5 +144,23 @@ describe("billLabel", () => {
   it("names the supplier's reference when there is one", () => {
     expect(billLabel({ supplierReference: "INV-4471", supplierName: "Acme Ltd" })).toBe("Bill INV-4471 — Acme Ltd");
     expect(billLabel({ supplierReference: null, supplierName: "Acme Ltd" })).toBe("Bill — Acme Ltd");
+  });
+});
+
+describe("billSettledStatus", () => {
+  it("follows what has been paid", () => {
+    expect(billSettledStatus("APPROVED", 10000, 0)).toBe("APPROVED");
+    expect(billSettledStatus("APPROVED", 10000, 2500)).toBe("PART_PAID");
+    expect(billSettledStatus("PART_PAID", 10000, 10000)).toBe("PAID");
+  });
+
+  it("returns to approved when the payments are voided", () => {
+    expect(billSettledStatus("PAID", 10000, 0)).toBe("APPROVED");
+    expect(billSettledStatus("PAID", 10000, 4000)).toBe("PART_PAID");
+  });
+
+  it("never moves a draft or a void", () => {
+    expect(billSettledStatus("DRAFT", 10000, 10000)).toBe("DRAFT");
+    expect(billSettledStatus("VOID", 10000, 0)).toBe("VOID");
   });
 });

@@ -15,7 +15,7 @@ data protection.
 | The customer printed on a document (name, address, tax id) | `invoices`, `credit_notes` (snapshot columns) | Same | Same: scrubbed together with the contact |
 | The supplier printed on a bill (name) and its notes | `bills` (snapshot columns) | Same | Same: scrubbed together with the contact |
 | Supplier documents attached to bills (PDFs, photos) | `bill_attachments` (in the database, so in the encrypted backups) | Usually: they carry the supplier's details | Same: deleted when the contact is anonymised |
-| Payment notes | `customer_payments.notes` | Possibly | Same |
+| Payment notes | `customer_payments.notes`, `supplier_payments.notes` | Possibly | Same |
 | Invoices, credit notes, bills, payments, journals (amounts, numbers, dates) | the books | No (once the snapshot is scrubbed) | Six years after the end of the financial year, then kept as anonymous figures |
 | Staff accounts: name, email, role, sign-in history | `users`, `audit_logs` | Yes | While the person works here; deactivated, not deleted, so the audit trail keeps its actor |
 | Staff and project resources (people on tasks) | `resources` | Yes | While the project exists |
@@ -55,7 +55,7 @@ What it does, in one transaction (`anonymise_contact()`):
   for a contact past its retention period.
 - The supplier name on its bills becomes `Anonymised contact` and their notes are
   cleared; the documents attached to those bills are deleted.
-- Payment notes are cleared.
+- Payment notes are cleared, on customer and supplier payments alike.
 - Numbers, dates, amounts, statuses and journals are **not** touched: the
   figures must still add up and the sequence of document numbers must stay intact.
 - An anonymised contact cannot be edited again.
@@ -70,7 +70,7 @@ obligation to keep company records applies, and when the data will be removed.
 
 Open the contact → *Export their data* (Admin only). It downloads one JSON file:
 the contact record, invoices with lines, credit notes, payments, bills with their
-lines and a list of their attachments (the files are downloaded from the bill), and the audit
+lines and a list of their attachments (the files are downloaded from the bill), supplier payments, and the audit
 entries about the contact. Staff identifiers and the log's hash fields are left out
 because they describe our people and our log, not the requester. The export is itself
 audited (`contact.export`).
