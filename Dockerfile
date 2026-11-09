@@ -1,5 +1,7 @@
 # Base image pinned by digest so a rebuild can't silently pick up a different
-# image. Bump the tag and digest together (Renovate/Dependabot can do this).
+# image. Bump the tag and digest together, by hand. Node 25+ no longer ships
+# Corepack, so moving past 24 also needs `npm i -g corepack` before the
+# `corepack enable` lines below.
 FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS builder
 WORKDIR /app
 
