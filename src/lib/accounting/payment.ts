@@ -36,6 +36,19 @@ export function refundPostingLines(amount: Pence, bankAccountId: string, debtors
   ];
 }
 
+/** Money out to a supplier: we owe them that much less, and the bank goes down. */
+export function supplierPaymentPostingLines(
+  amount: Pence,
+  bankAccountId: string,
+  creditorsAccountId: string
+): PostingLine[] {
+  assertPositive(amount);
+  return [
+    { accountId: creditorsAccountId, debit: amount, credit: 0 },
+    { accountId: bankAccountId, debit: 0, credit: amount },
+  ];
+}
+
 function assertPositive(amount: Pence): void {
   if (!Number.isInteger(amount) || amount <= 0) {
     throw new AccountingError("INVALID_AMOUNT", "A payment must be more than zero", 422);

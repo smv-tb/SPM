@@ -13,8 +13,10 @@ data protection.
 |---|---|---|---|
 | Customers and suppliers: name, email, phone, tax id, addresses, notes | `contacts` | Yes, when the contact is an individual or names one | Until the contact's retention period ends, then anonymised |
 | The customer printed on a document (name, address, tax id) | `invoices`, `credit_notes` (snapshot columns) | Same | Same: scrubbed together with the contact |
-| Payment notes | `customer_payments.notes` | Possibly | Same |
-| Invoices, credit notes, payments, journals (amounts, numbers, dates) | the books | No (once the snapshot is scrubbed) | Six years after the end of the financial year, then kept as anonymous figures |
+| The supplier printed on a bill (name) and its notes | `bills` (snapshot columns) | Same | Same: scrubbed together with the contact |
+| Supplier documents attached to bills (PDFs, photos) | `bill_attachments` (in the database, so in the encrypted backups) | Usually: they carry the supplier's details | Same: deleted when the contact is anonymised |
+| Payment notes | `customer_payments.notes`, `supplier_payments.notes` | Possibly | Same |
+| Invoices, credit notes, bills, payments, journals (amounts, numbers, dates) | the books | No (once the snapshot is scrubbed) | Six years after the end of the financial year, then kept as anonymous figures |
 | Staff accounts: name, email, role, sign-in history | `users`, `audit_logs` | Yes | While the person works here; deactivated, not deleted, so the audit trail keeps its actor |
 | Staff and project resources (people on tasks) | `resources` | Yes | While the project exists |
 | Audit log | `audit_logs` | Minimised (below) | Indefinitely: it is append-only and hash-chained, so it cannot be edited or pruned |
@@ -26,11 +28,11 @@ data protection.
 Company accounting records are kept for **six years after the end of the
 financial year** they belong to (the UK limit for companies; confirm yours). A
 contact's period is counted from the financial year of its **most recent**
-document of any kind: invoice, credit note or payment, voided ones included. The
+document of any kind: invoice, credit note, bill or payment, voided ones included. The
 financial year comes from Books settings.
 
-A contact is **held back** while it has a draft, unpaid or part-paid invoice, or
-a draft credit note, however old.
+A contact is **held back** while it has a draft, unpaid or part-paid invoice or
+bill, or a draft credit note, however old.
 
 Both rules are in the database (`contact_retention_until()`,
 `contact_has_open_documents()`), not only the application, so a script or a psql
@@ -51,7 +53,9 @@ What it does, in one transaction (`anonymise_contact()`):
   contact` with no address or tax id, and their free-text notes are cleared. This is
   the only edit the approval guards allow on an approved document, and only
   for a contact past its retention period.
-- Payment notes are cleared.
+- The supplier name on its bills becomes `Anonymised contact` and their notes are
+  cleared; the documents attached to those bills are deleted.
+- Payment notes are cleared, on customer and supplier payments alike.
 - Numbers, dates, amounts, statuses and journals are **not** touched: the
   figures must still add up and the sequence of document numbers must stay intact.
 - An anonymised contact cannot be edited again.
@@ -65,7 +69,8 @@ obligation to keep company records applies, and when the data will be removed.
 ## Subject access requests
 
 Open the contact → *Export their data* (Admin only). It downloads one JSON file:
-the contact record, invoices with lines, credit notes, payments, and the audit
+the contact record, invoices with lines, credit notes, payments, bills with their
+lines and a list of their attachments (the files are downloaded from the bill), supplier payments, and the audit
 entries about the contact. Staff identifiers and the log's hash fields are left out
 because they describe our people and our log, not the requester. The export is itself
 audited (`contact.export`).

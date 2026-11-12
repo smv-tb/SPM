@@ -36,3 +36,6 @@ export function agedDebtorsRows(report: AgedDebtors): ReportRow[] {
 }
 
 export const AGED_DEBTORS_COLUMNS = [...AGE_BUCKETS.map((b) => AGE_BUCKET_LABEL[b]), "Unused credit", "Balance"];
+
+/** Aged creditors prints from the same rows; unused credit is money paid on account. */
+export const AGED_CREDITORS_COLUMNS = [...AGE_BUCKETS.map((b) => AGE_BUCKET_LABEL[b]), "Paid on account", "Balance"];

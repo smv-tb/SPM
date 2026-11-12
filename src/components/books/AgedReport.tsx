@@ -15,13 +15,43 @@ import { downloadCSV } from "@/lib/export-csv";
 import { AGE_BUCKETS, AGE_BUCKET_LABEL, type AgedDebtors } from "@/lib/accounting/aged-debtors";
 import { ChevronDown, ChevronRight, Download, Hourglass, FileText } from "lucide-react";
 
+/** The words and links that differ between the two sides of the ledger. */
+const SIDES = {
+  debtors: {
+    title: "Aged debtors",
+    path: "aged-debtors",
+    subtitle: "What customers owed on",
+    party: "Customer",
+    document: "/books/invoices",
+    emptyTitle: "Nobody owes anything",
+    emptyText: "No unpaid invoices and no unused credit on this date.",
+    unused: "Unused credit",
+    account: "trade debtors",
+    code: "1100",
+  },
+  creditors: {
+    title: "Aged creditors",
+    path: "aged-creditors",
+    subtitle: "What we owed suppliers on",
+    party: "Supplier",
+    document: "/books/bills",
+    emptyTitle: "Nothing is owed to suppliers",
+    emptyText: "No unpaid bills and no money paid on account on this date.",
+    unused: "Paid on account",
+    account: "trade creditors",
+    code: "2100",
+  },
+} as const;
+
 interface Props {
+  side: keyof typeof SIDES;
   report: AgedDebtors & { ledgerBalance: number; difference: number };
 }
 
 const money = (pence: number) => (pence === 0 ? "—" : formatPence(pence));
 
-export function AgedDebtorsClient({ report }: Props) {
+export function AgedReport({ side, report }: Props) {
+  const text = SIDES[side];
   const router = useRouter();
   const [asAt, setAsAt] = useState(report.asAt);
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -35,27 +65,27 @@ export function AgedDebtorsClient({ report }: Props) {
     });
 
   function exportCsv() {
-    // Exact decimal amounts, one row per customer and a total, like the TB export.
+    // Exact decimal amounts, one row per contact and a total, like the TB export.
     const rows = [
-      ...report.rows.map((r) => ({ customer: r.contactName, ...r })),
-      { customer: "Total", ...report.totals },
+      ...report.rows.map((r) => ({ name: r.contactName, ...r })),
+      { name: "Total", ...report.totals },
     ].map((r) => ({
-      Customer: r.customer,
+      [text.party]: r.name,
       ...Object.fromEntries(AGE_BUCKETS.map((b) => [AGE_BUCKET_LABEL[b], fromPence(r[b])])),
-      "Unused credit": fromPence(-r.unusedCredit),
+      [text.unused]: fromPence(-r.unusedCredit),
       Balance: fromPence(r.balance),
     }));
-    downloadCSV(rows, `aged-debtors-${report.asAt}.csv`);
+    downloadCSV(rows, `${text.path}-${report.asAt}.csv`);
   }
 
   return (
     <>
       <Topbar
-        title="Aged debtors"
-        subtitle={`What customers owed on ${formatDate(report.asAt)}, by how late it is`}
+        title={text.title}
+        subtitle={`${text.subtitle} ${formatDate(report.asAt)}, by how late it is`}
         breadcrumbs={[
           { label: "Books", href: "/books" },
-          { label: "Aged debtors", href: "/books/aged-debtors" },
+          { label: text.title, href: `/books/${text.path}` },
         ]}
         actions={
           report.rows.length > 0 ? (
@@ -64,7 +94,7 @@ export function AgedDebtorsClient({ report }: Props) {
                 <Download className="w-3.5 h-3.5" /> Export CSV
               </Button>
               <Button variant="outline" size="sm" asChild>
-                <a href={`/api/books/reports/aged-debtors/pdf?asAt=${report.asAt}`} target="_blank" rel="noreferrer">
+                <a href={`/api/books/reports/${text.path}/pdf?asAt=${report.asAt}`} target="_blank" rel="noreferrer">
                   <FileText className="w-3.5 h-3.5" /> PDF
                 </a>
               </Button>
@@ -78,7 +108,7 @@ export function AgedDebtorsClient({ report }: Props) {
           className="flex items-end gap-3"
           onSubmit={(e) => {
             e.preventDefault();
-            router.push(`/books/aged-debtors?asAt=${asAt}`);
+            router.push(`/books/${text.path}?asAt=${asAt}`);
           }}
         >
           <div>
@@ -93,18 +123,18 @@ export function AgedDebtorsClient({ report }: Props) {
         <Card>
           <CardContent className="px-0 py-0 overflow-x-auto">
             {report.rows.length === 0 ? (
-              <EmptyState icon={Hourglass} title="Nobody owes anything" description="No unpaid invoices and no unused credit on this date." />
+              <EmptyState icon={Hourglass} title={text.emptyTitle} description={text.emptyText} />
             ) : (
               <table className="w-full text-sm">
                 <thead className="text-xs uppercase tracking-wider text-muted-foreground">
                   <tr className="border-b border-border">
-                    <th className="px-5 py-3 text-left font-semibold min-w-48">Customer</th>
+                    <th className="px-5 py-3 text-left font-semibold min-w-48">{text.party}</th>
                     {AGE_BUCKETS.map((b) => (
                       <th key={b} className="px-3 py-3 text-right font-semibold whitespace-nowrap">
                         {AGE_BUCKET_LABEL[b]}
                       </th>
                     ))}
-                    <th className="px-3 py-3 text-right font-semibold whitespace-nowrap">Unused credit</th>
+                    <th className="px-3 py-3 text-right font-semibold whitespace-nowrap">{text.unused}</th>
                     <th className="px-5 py-3 text-right font-semibold">Balance</th>
                   </tr>
                 </thead>
@@ -146,8 +176,8 @@ export function AgedDebtorsClient({ report }: Props) {
                         row.invoices.map((invoice) => (
                           <tr key={invoice.id} className="bg-muted/10 text-muted-foreground">
                             <td className="pl-10 pr-5 py-2">
-                              <Link href={`/books/invoices/${invoice.id}`} className="text-primary hover:underline">
-                                {invoice.number}
+                              <Link href={`${text.document}/${invoice.id}`} className="text-primary hover:underline">
+                                {invoice.number ?? "Bill"}
                               </Link>{" "}
                               due {formatDate(invoice.dueDate)}
                             </td>
@@ -184,14 +214,14 @@ export function AgedDebtorsClient({ report }: Props) {
         {/* The report is built from documents; the ledger is the books. They should agree. */}
         {report.difference === 0 ? (
           <p className="text-sm text-muted-foreground">
-            Agrees with the trade debtors account (1100): {formatPence(report.ledgerBalance)}.
+            Agrees with the {text.account} account ({text.code}): {formatPence(report.ledgerBalance)}.
           </p>
         ) : (
           <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
-            Trade debtors (1100) stands at {formatPence(report.ledgerBalance)} on this date,{" "}
-            {formatPence(Math.abs(report.difference))} {report.difference > 0 ? "more" : "less"} than this
-            report. A manual journal to 1100, or a document dated before this day that was voided after it,
-            would explain the gap.
+            {text.account[0].toUpperCase() + text.account.slice(1)} ({text.code}) stands at{" "}
+            {formatPence(report.ledgerBalance)} on this date, {formatPence(Math.abs(report.difference))}{" "}
+            {report.difference > 0 ? "more" : "less"} than this report. A manual journal to {text.code} would
+            explain the gap.
           </div>
         )}
       </main>

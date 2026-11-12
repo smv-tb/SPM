@@ -1,5 +1,7 @@
 services:
   app:
+    # Built from source by `docker compose up -d --build` (deploy.sh does this).
+    image: smartvie-pm:${SMARTVIE_VERSION:-latest}
     build:
       context: .
       dockerfile: Dockerfile

@@ -5,7 +5,8 @@
  *  - BOOK: an entry already in the books on that bank account (a recorded
  *    payment, a refund, a transfer) — same amount, close in date;
  *  - INVOICE: money in that pays one or more open invoices not yet recorded
- *    as paid — matching it records the payment and reconciles in one step.
+ *    as paid — matching it records the payment and reconciles in one step;
+ *  - BILL: the same for money out that pays one or more open supplier bills.
  *
  * Every candidate gets a confidence. Only HIGH is ever applied without a
  * person looking, and only when nothing competes for the same line or the
@@ -46,6 +47,16 @@ export interface OpenInvoiceIn {
   issueDate: string;
 }
 
+export interface OpenBillIn {
+  id: string;
+  /** The supplier's invoice number, when the bill has one. */
+  reference: string | null;
+  contactId: string;
+  contactName: string;
+  amountDue: Pence;
+  issueDate: string;
+}
+
 export type Candidate =
   | {
       kind: "BOOK";
@@ -61,6 +72,15 @@ export type Candidate =
   | {
       kind: "INVOICE";
       invoiceIds: string[];
+      contactId: string;
+      label: string;
+      confidence: Confidence;
+      score: number;
+      reasons: string[];
+    }
+  | {
+      kind: "BILL";
+      billIds: string[];
       contactId: string;
       label: string;
       confidence: Confidence;
@@ -152,11 +172,11 @@ function bookCandidates(line: StatementLineIn, books: BookLineIn[]): Candidate[]
     });
 }
 
-/** Subsets of up to four invoices that sum exactly to the amount. */
-function exactCombinations(invoices: OpenInvoiceIn[], amount: Pence): OpenInvoiceIn[][] {
-  const found: OpenInvoiceIn[][] = [];
-  const list = invoices.slice(0, 12); // a bounded search: 12 choose ≤4 is small
-  const walk = (start: number, chosen: OpenInvoiceIn[], total: Pence) => {
+/** Subsets of up to four documents that sum exactly to the amount. */
+function exactCombinations<T extends { amountDue: Pence }>(documents: T[], amount: Pence): T[][] {
+  const found: T[][] = [];
+  const list = documents.slice(0, 12); // a bounded search: 12 choose ≤4 is small
+  const walk = (start: number, chosen: T[], total: Pence) => {
     if (total === amount && chosen.length >= 2) found.push(chosen);
     if (chosen.length === 4 || total >= amount) return;
     for (let i = start; i < list.length; i++) walk(i + 1, [...chosen, list[i]], total + list[i].amountDue);
@@ -216,6 +236,68 @@ function invoiceCandidates(line: StatementLineIn, invoices: OpenInvoiceIn[]): Ca
   return out;
 }
 
+/**
+ * Does the description quote the supplier's reference? Their numbering is
+ * theirs, so a reference too short to be distinctive ("12") is not evidence.
+ */
+export function quotesReference(description: string, reference: string | null): boolean {
+  if (!reference || reference.replace(/[^A-Za-z0-9]/g, "").length < 4) return false;
+  return quotesInvoice(description, reference);
+}
+
+const billName = (bill: OpenBillIn) => bill.reference ?? `bill of ${bill.issueDate}`;
+
+/** Money out that pays supplier bills: the same evidence as invoices, mirrored. */
+function billCandidates(line: StatementLineIn, bills: OpenBillIn[]): Candidate[] {
+  if (line.amount >= 0) return [];
+  const paid = -line.amount;
+  const open = bills.filter((b) => b.amountDue > 0 && b.issueDate <= line.date);
+  const out: Candidate[] = [];
+
+  for (const bill of open) {
+    const quoted = quotesReference(line.description, bill.reference);
+    const named = namesCustomer(line.description, bill.contactName);
+    const exact = bill.amountDue === paid;
+    if (!exact && !quoted) continue;
+    const reasons: string[] = [];
+    if (exact) reasons.push("Pays exactly what is due");
+    if (quoted) reasons.push(`Quotes ${bill.reference}`);
+    if (named) reasons.push(`Names ${bill.contactName}`);
+    const confidence: Confidence = exact && quoted ? "HIGH" : exact && named ? "MEDIUM" : "LOW";
+    out.push({
+      kind: "BILL",
+      billIds: [bill.id],
+      contactId: bill.contactId,
+      label: `Pays ${billName(bill)} — ${bill.contactName}`,
+      confidence,
+      score: (exact ? 50 : 0) + (quoted ? 40 : 0) + (named ? 20 : 0),
+      reasons,
+    });
+  }
+
+  // One transfer paying several bills of one supplier the bank names.
+  const bySupplier = new Map<string, OpenBillIn[]>();
+  for (const bill of open) {
+    if (!namesCustomer(line.description, bill.contactName)) continue;
+    bySupplier.set(bill.contactId, [...(bySupplier.get(bill.contactId) ?? []), bill]);
+  }
+  for (const [contactId, theirs] of bySupplier) {
+    for (const combo of exactCombinations(theirs, paid)) {
+      const allQuoted = combo.every((b) => quotesReference(line.description, b.reference));
+      out.push({
+        kind: "BILL",
+        billIds: combo.map((b) => b.id),
+        contactId,
+        label: `Pays ${combo.map(billName).join(" + ")} — ${combo[0].contactName}`,
+        confidence: allQuoted ? "HIGH" : "MEDIUM",
+        score: 45 + (allQuoted ? 40 : 0),
+        reasons: ["Pays exactly what is due on all of them", `Names ${combo[0].contactName}`, ...(allQuoted ? ["Quotes every reference"] : [])],
+      });
+    }
+  }
+  return out;
+}
+
 const RANK: Record<Confidence, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
 
 /**
@@ -228,11 +310,16 @@ const RANK: Record<Confidence, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
 export function suggestMatches(
   lines: StatementLineIn[],
   books: BookLineIn[],
-  invoices: OpenInvoiceIn[]
+  invoices: OpenInvoiceIn[],
+  bills: OpenBillIn[] = []
 ): Suggestion[] {
   const raw = lines.map((line) => ({
     line,
-    candidates: [...bookCandidates(line, books), ...invoiceCandidates(line, invoices)],
+    candidates: [
+      ...bookCandidates(line, books),
+      ...invoiceCandidates(line, invoices),
+      ...billCandidates(line, bills),
+    ],
   }));
 
   // Which lines each book entry could be: an entry wanted by two lines is
@@ -274,5 +361,7 @@ export function suggestMatches(
 }
 
 function keysOf(c: Candidate): string[] {
-  return c.kind === "BOOK" ? c.journalLineIds.map((id) => `book:${id}`) : c.invoiceIds.map((id) => `inv:${id}`);
+  if (c.kind === "BOOK") return c.journalLineIds.map((id) => `book:${id}`);
+  if (c.kind === "BILL") return c.billIds.map((id) => `bill:${id}`);
+  return c.invoiceIds.map((id) => `inv:${id}`);
 }

@@ -187,6 +187,31 @@ export const invoiceVoidSchema = z.object({
   reason: z.string().min(1, "Say why it is being voided").max(300),
 });
 
+export const billLineSchema = z.object({
+  // Blank is checked by `validateBill`, which can say which line it is.
+  description: z.string().max(500),
+  quantity: quantity.default("1"),
+  unitPrice: amount,
+  /** May be empty on a draft; approval needs one. */
+  accountId: z.string().uuid("Invalid account").nullable().optional(),
+  vatCode: z.string().max(20).nullable().optional(),
+});
+
+export const billSchema = z.object({
+  contactId: z.string().uuid("Choose a supplier"),
+  /** The supplier's own invoice number. */
+  supplierReference: z.string().max(100).nullable().optional(),
+  issueDate: dateOnly,
+  /** Omitted takes the bill date plus the supplier's usual terms. */
+  dueDate: dateOnly.nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  // Tracking dimension: legacy project ids are not UUIDs (see journal lines).
+  projectId: z.string().min(1).nullable().optional(),
+  lines: z.array(billLineSchema).min(1, "Add at least one line").max(200),
+  /** Approve immediately rather than leaving a draft. */
+  approve: z.boolean().default(false),
+});
+
 export const creditNoteSchema = z.object({
   contactId: z.string().uuid("Choose a customer"),
   /** The invoice being corrected; null for credit not tied to one. */
@@ -225,6 +250,34 @@ export const paymentSchema = z.object({
     .array(z.object({ invoiceId: z.string().uuid("Invalid invoice"), amount: amount.optional() }))
     .max(50)
     .default([]),
+});
+
+export const supplierPaymentSchema = z.object({
+  contactId: z.string().uuid("Choose a supplier"),
+  date: dateOnly,
+  /** Pounds, as written; parsed to pence by the route. */
+  amount,
+  /** A 12xx bank account; omitted means 1200. */
+  bankAccountId: z.string().uuid("Invalid account").nullable().optional(),
+  reference: z.string().max(100).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  /**
+   * Money-out statement line this payment is. The line's own date, amount and
+   * bank account are used and the line is reconciled in the same step.
+   */
+  statementLineId: z.string().uuid("Invalid statement line").nullable().optional(),
+  /** Bills to settle, in order; an omitted amount takes what each still owes. */
+  allocations: z
+    .array(z.object({ billId: z.string().uuid("Invalid bill"), amount: amount.optional() }))
+    .max(50)
+    .default([]),
+});
+
+export const billAllocationSchema = z.object({
+  billId: z.string().uuid("Choose a bill"),
+  /** Pounds, as written. Omitted applies as much as the payment and the bill allow. */
+  amount: amount.optional(),
+  date: dateOnly.optional(),
 });
 
 export const refundSchema = z.object({
@@ -278,6 +331,11 @@ export const reconcileInvoicesSchema = z.object({
   invoiceIds: ids("Invalid invoice"),
 });
 
+export const reconcileBillsSchema = z.object({
+  statementLineId: z.string().uuid("Invalid statement line"),
+  billIds: ids("Invalid bill"),
+});
+
 export const reconcileCreateSchema = z.object({
   statementLineId: z.string().uuid("Invalid statement line"),
   accountId: z.string().uuid("Choose an account"),
@@ -304,8 +362,12 @@ export type InvoiceLineRequest = z.infer<typeof invoiceLineSchema>;
 export type InvoiceRequest = z.infer<typeof invoiceSchema>;
 export type InvoiceSendInput = z.infer<typeof invoiceSendSchema>;
 export type InvoiceVoidInput = z.infer<typeof invoiceVoidSchema>;
+export type BillLineRequest = z.infer<typeof billLineSchema>;
+export type BillRequest = z.infer<typeof billSchema>;
 export type CreditNoteRequest = z.infer<typeof creditNoteSchema>;
 export type CreditAllocationRequest = z.infer<typeof creditAllocationSchema>;
 export type PaymentRequest = z.infer<typeof paymentSchema>;
 export type RefundRequest = z.infer<typeof refundSchema>;
+export type SupplierPaymentRequest = z.infer<typeof supplierPaymentSchema>;
+export type BillAllocationRequest = z.infer<typeof billAllocationSchema>;
 export type LockDateInput = z.infer<typeof lockDateSchema>;

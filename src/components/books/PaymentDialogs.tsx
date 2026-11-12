@@ -53,29 +53,64 @@ interface OpenStatementLine {
   ledgerAccountId: string;
 }
 
+/** The words, endpoints and request keys that differ between money in and money out. */
+const SIDES = {
+  in: {
+    endpoint: "/api/books/payments",
+    linesEndpoint: "/api/books/payments/statement-lines",
+    allocationKey: "invoiceId",
+    party: "Customer",
+    choose: "Choose a customer…",
+    titleFor: (label: string) => `Record payment for ${label}`,
+    title: "Record a payment received",
+    dateLabel: "Date received",
+    extra: (over: string, label: string) =>
+      `That is ${over} more than ${label} owes; the extra is kept as the customer's credit, to apply to another invoice or refund.`,
+    onAccount: "Recorded on account; apply it to the customer's invoices from the payment.",
+  },
+  out: {
+    endpoint: "/api/books/supplier-payments",
+    linesEndpoint: "/api/books/supplier-payments/statement-lines",
+    allocationKey: "billId",
+    party: "Supplier",
+    choose: "Choose a supplier…",
+    titleFor: (label: string) => `Record payment of ${label}`,
+    title: "Record a payment to a supplier",
+    dateLabel: "Date paid",
+    extra: (over: string, label: string) =>
+      `That is ${over} more than ${label} owes; the extra is recorded as paid on account, to apply to another of their bills.`,
+    onAccount: "Recorded on account; apply it to the supplier's bills from the payment.",
+  },
+} as const;
+
 interface RecordPaymentProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   bankAccounts: BankAccountOption[];
-  /** Paying a known invoice: the customer is fixed and the amount defaults to what is due. */
+  /** Money in from a customer (the default), or out to a supplier. */
+  side?: keyof typeof SIDES;
+  /** Paying a known invoice or bill: the contact is fixed and the amount defaults to what is due. */
   invoice?: { id: string; number: string | null; contactId: string; amountDue: number } | null;
-  /** Otherwise the customer is chosen; the money is held on account until allocated. */
+  /** Otherwise the contact is chosen; the money is held on account until allocated. */
   customers?: { id: string; name: string }[];
   onRecorded: (paymentId: string) => void;
 }
 
 /**
- * Records money received. Against an invoice, anything over what it owes is
- * kept as the customer's credit — the dialog says so before it is saved.
+ * Records money received from a customer, or paid to a supplier. Against an
+ * invoice or a bill, anything over what it owes is held on account — the
+ * dialog says so before it is saved.
  */
 export function RecordPaymentDialog({
   open,
   onOpenChange,
   bankAccounts,
+  side = "in",
   invoice,
   customers = [],
   onRecorded,
 }: RecordPaymentProps) {
+  const text = SIDES[side];
   const [contactId, setContactId] = useState(invoice?.contactId ?? "");
   const [date, setDate] = useState(calendarDateKey());
   const [amount, setAmount] = useState(invoice ? fromPence(invoice.amountDue) : "");
@@ -86,18 +121,19 @@ export function RecordPaymentDialog({
   const [lines, setLines] = useState<OpenStatementLine[]>([]);
   const [lineId, setLineId] = useState("");
 
-  // Unreconciled money-in lines from imported statements; best-effort, the dialog works without them.
+  // Unreconciled lines from imported statements (money in, or money out shown
+  // as what was paid); best-effort, the dialog works without them.
   useEffect(() => {
     if (!open) return;
     let live = true;
-    fetch("/api/books/payments/statement-lines")
+    clientFetch(text.linesEndpoint)
       .then((res) => (res.ok ? res.json() : { lines: [] }))
       .then((data) => live && setLines(data.lines ?? []))
       .catch(() => {});
     return () => {
       live = false;
     };
-  }, [open]);
+  }, [open, text.linesEndpoint]);
 
   const line = lines.find((l) => l.id === lineId) ?? null;
 
@@ -121,11 +157,12 @@ export function RecordPaymentDialog({
 
   const pence = typedPence(amount);
   const over = invoice && pence !== null ? pence - invoice.amountDue : 0;
+  const label = invoice?.number ?? (side === "in" ? "the invoice" : "the bill");
 
   async function save() {
     setBusy(true);
     setError("");
-    const res = await clientFetch("/api/books/payments", {
+    const res = await clientFetch(text.endpoint, {
       method: "POST",
       body: JSON.stringify({
         contactId,
@@ -134,7 +171,7 @@ export function RecordPaymentDialog({
         bankAccountId: accountId || null,
         reference: reference.trim() || null,
         statementLineId: lineId || null,
-        allocations: invoice ? [{ invoiceId: invoice.id }] : [],
+        allocations: invoice ? [{ [text.allocationKey]: invoice.id }] : [],
       }),
     });
     setBusy(false);
@@ -152,14 +189,14 @@ export function RecordPaymentDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{invoice ? `Record payment for ${invoice.number}` : "Record a payment received"}</DialogTitle>
+          <DialogTitle>{invoice ? text.titleFor(label) : text.title}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           {!invoice && (
             <div>
-              <FormLabel htmlFor="payment-customer">Customer</FormLabel>
+              <FormLabel htmlFor="payment-customer">{text.party}</FormLabel>
               <Select id="payment-customer" value={contactId} onChange={(e) => setContactId(e.target.value)}>
-                <option value="">Choose a customer…</option>
+                <option value="">{text.choose}</option>
                 {customers.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
@@ -190,7 +227,7 @@ export function RecordPaymentDialog({
           )}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <FormLabel htmlFor="payment-date">Date received</FormLabel>
+              <FormLabel htmlFor="payment-date">{text.dateLabel}</FormLabel>
               <Input
                 id="payment-date"
                 type="date"
@@ -223,20 +260,14 @@ export function RecordPaymentDialog({
             />
           </div>
           {invoice && pence !== null && over > 0 && (
-            <p className="text-sm text-amber-700">
-              {`That is ${formatPence(over)} more than ${invoice.number} owes; the extra is kept as the customer's credit, to apply to another invoice or refund.`}
-            </p>
+            <p className="text-sm text-amber-700">{text.extra(formatPence(over), label)}</p>
           )}
           {invoice && pence !== null && over < 0 && (
             <p className="text-sm text-muted-foreground">
               A part payment: {formatPence(-over)} will still be owed.
             </p>
           )}
-          {!invoice && (
-            <p className="text-sm text-muted-foreground">
-              Recorded on account; apply it to the customer&apos;s invoices from the payment.
-            </p>
-          )}
+          {!invoice && <p className="text-sm text-muted-foreground">{text.onAccount}</p>}
           {error && <p className="text-sm text-red-600">{error}</p>}
         </div>
         <DialogFooter>

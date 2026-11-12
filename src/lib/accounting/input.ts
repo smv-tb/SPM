@@ -1,5 +1,6 @@
 import { MoneyError, toPence } from "@/lib/money";
-import type { InvoiceLineRequest, JournalLineInput } from "@/schemas/books";
+import type { BillLineRequest, InvoiceLineRequest, JournalLineInput } from "@/schemas/books";
+import type { BillLineInput } from "./bill";
 import { AccountingError, type JournalProblem, type RuleProblem } from "./errors";
 import type { JournalLineDraft } from "./journal";
 import type { InvoiceLineInput } from "./invoice";
@@ -94,6 +95,47 @@ export function toInvoiceLines(lines: InvoiceLineRequest[]): InvoiceLineInput[] 
 
   if (problems.length > 0) {
     throw new AccountingError("INVALID_INVOICE", "Invoice has invalid figures", 422, problems);
+  }
+  return drafts;
+}
+
+/** Bill lines, parsed the same strict way as invoice lines. */
+export function toBillLines(lines: BillLineRequest[]): BillLineInput[] {
+  const problems: RuleProblem[] = [];
+
+  const drafts = lines.map((line, i) => {
+    const at = i + 1;
+    let quantity = 0;
+    let unitPrice = 0;
+    try {
+      quantity = toMilli(line.quantity);
+    } catch (error) {
+      problems.push({
+        code: "INVALID_QUANTITY",
+        message: error instanceof MoneyError ? error.message : "Invalid quantity",
+        line: at,
+      });
+    }
+    try {
+      unitPrice = toPence(line.unitPrice);
+    } catch (error) {
+      problems.push({
+        code: "INVALID_AMOUNT",
+        message: error instanceof MoneyError ? error.message : "Invalid price",
+        line: at,
+      });
+    }
+    return {
+      description: line.description,
+      quantity,
+      unitPrice,
+      accountId: line.accountId ?? null,
+      vatCode: line.vatCode ?? null,
+    };
+  });
+
+  if (problems.length > 0) {
+    throw new AccountingError("INVALID_BILL", "Bill has invalid figures", 422, problems);
   }
   return drafts;
 }

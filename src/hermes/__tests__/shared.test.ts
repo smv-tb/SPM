@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { Prisma } from "@prisma/client";
-import { diffFields, diffIdSet, pickFields, parseFields, resolveOwner } from "@/hermes/tools/_shared";
+import {
+  diffFields, diffIdSet, pickFields, parseFields, resolveOwner,
+  parsePagination, paginateResponse, clampPercent, toDate, safeNumber,
+} from "@/hermes/tools/_shared";
+import { MAX_PAGE_LIMIT } from "@/lib/constants";
 import { normalizeCode, codePrefix } from "@/hermes/tools/general";
 
 describe("diffFields", () => {
@@ -70,5 +74,40 @@ describe("search code helpers", () => {
     expect(codePrefix("M1.3-T01")).toBe("M1.3");
     expect(codePrefix("M2-T4")).toBe("M2");
     expect(codePrefix("M1.3")).toBeNull();
+  });
+});
+
+describe("pagination", () => {
+  it("asks for one extra row so it can tell there is a next page", () => {
+    expect(parsePagination({ limit: 10 })).toEqual({ take: 11, cursor: undefined, skip: 0 });
+    expect(parsePagination({ limit: 10, cursor: "x" })).toEqual({ take: 11, cursor: { id: "x" }, skip: 1 });
+  });
+
+  it("never exceeds the page cap", () => {
+    expect(parsePagination({ limit: 1e6 }).take).toBe(MAX_PAGE_LIMIT + 1);
+  });
+
+  it("trims the extra row and returns its predecessor as the cursor", () => {
+    const rows = [{ id: "a" }, { id: "b" }, { id: "c" }];
+    expect(paginateResponse(rows, 2)).toEqual({ data: [{ id: "a" }, { id: "b" }], nextCursor: "b" });
+    expect(paginateResponse(rows, 3)).toEqual({ data: rows, nextCursor: null });
+  });
+});
+
+describe("value helpers", () => {
+  it("clamps percentages to 0-100", () => {
+    expect([clampPercent(-5), clampPercent(42), clampPercent(250)]).toEqual([0, 42, 100]);
+  });
+
+  it("turns a calendar string into a Date and leaves undefined alone", () => {
+    expect(toDate("2026-03-01")).toEqual(new Date("2026-03-01"));
+    expect(toDate(undefined)).toBeUndefined();
+  });
+
+  it("keeps null (clear the field) distinct from a bad number (ignore it)", () => {
+    expect(safeNumber(null)).toBeNull();
+    expect(safeNumber(undefined)).toBeUndefined();
+    expect(safeNumber("abc")).toBeUndefined();
+    expect(safeNumber("12.5")).toBe(12.5);
   });
 });

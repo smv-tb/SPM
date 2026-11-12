@@ -44,13 +44,22 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
   const router = useRouter();
   const [chosen, setChosen] = useState<Record<string, number>>({});
   const [creating, setCreating] = useState<Record<string, { accountId: string; memo: string } | undefined>>({});
-  const [paying, setPaying] = useState<Record<string, { contactId: string; invoiceIds: string[] } | undefined>>({});
+  const [paying, setPaying] = useState<Record<string, { contactId: string; ids: string[] } | undefined>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
 
   const suggestionFor = new Map(view.suggestions.map((s) => [s.statementLineId, s]));
   const autoCount = view.suggestions.filter((s) => s.auto).length;
   const base = `/api/books/bank-accounts/${account.id}/reconcile`;
+
+  // Money in pays customers' invoices; money out pays suppliers' bills.
+  const invoices = view.openInvoices.map((i) => ({ ...i, label: i.number }));
+  const bills = view.openBills.map((b) => ({ ...b, label: b.reference ?? "Bill" }));
+  const contactsOf = (docs: { contactId: string; contactName: string }[]) => [
+    ...new Map(docs.map((d) => [d.contactId, d.contactName])).entries(),
+  ];
+  const customers = contactsOf(invoices);
+  const suppliers = contactsOf(bills);
 
   async function send(path: string, init: RequestInit, success?: string) {
     setBusy(true);
@@ -73,6 +82,11 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
         method: "POST",
         body: JSON.stringify({ statementLineIds: [lineId], journalLineIds: c.journalLineIds }),
       });
+    } else if (c.kind === "BILL") {
+      await send(`${base}/bills`, {
+        method: "POST",
+        body: JSON.stringify({ statementLineId: lineId, billIds: c.billIds }),
+      });
     } else {
       await send(`${base}/invoices`, {
         method: "POST",
@@ -87,7 +101,7 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
       setMessage({
         tone: "ok",
         text: `Matched ${result.matched} line${result.matched === 1 ? "" : "s"}${
-          result.paymentsRecorded ? `, recording ${result.paymentsRecorded} invoice payment${result.paymentsRecorded === 1 ? "" : "s"}` : ""
+          result.paymentsRecorded ? `, recording ${result.paymentsRecorded} payment${result.paymentsRecorded === 1 ? "" : "s"}` : ""
         }. ${result.left} left to look at.`,
       });
     }
@@ -146,9 +160,15 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
               const pick = candidates[chosen[line.id] ?? 0];
               const create = creating[line.id];
               const pay = paying[line.id];
-              const customers = [...new Map(view.openInvoices.map((i) => [i.contactId, i.contactName])).entries()];
-              const payInvoices = pay ? view.openInvoices.filter((i) => i.contactId === pay.contactId) : [];
-              const payTotal = payInvoices.filter((i) => pay?.invoiceIds.includes(i.id)).reduce((n, i) => n + i.amountDue, 0);
+              const moneyIn = line.amount > 0;
+              const docs = moneyIn ? invoices : bills;
+              const contacts = moneyIn ? customers : suppliers;
+              const words = moneyIn
+                ? { party: "Customer paying…", docs: "invoices", extra: "the customer's credit", endpoint: "invoices", key: "invoiceIds", start: "Mark as customer payment…" }
+                : { party: "Supplier paid…", docs: "bills", extra: "paid on account", endpoint: "bills", key: "billIds", start: "Mark as supplier payment…" };
+              const size = Math.abs(line.amount);
+              const payDocs = pay ? docs.filter((d) => d.contactId === pay.contactId) : [];
+              const payTotal = payDocs.filter((d) => pay?.ids.includes(d.id)).reduce((n, d) => n + d.amountDue, 0);
               return (
                 <Card key={line.id}>
                   <CardContent className="p-4 space-y-3">
@@ -176,7 +196,7 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
                           </div>
                           <p className="text-xs text-muted-foreground">
                             {pick.reasons.join(" · ")}
-                            {pick.kind === "INVOICE" && " · matching records the payment"}
+                            {pick.kind !== "BOOK" && " · matching records the payment"}
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
@@ -205,11 +225,11 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
                       <p className="text-sm text-muted-foreground">Nothing in the books matches this yet.</p>
                     )}
 
-                    {canReconcile && line.amount > 0 && customers.length > 0 && !create &&
+                    {canReconcile && line.amount !== 0 && contacts.length > 0 && !create &&
                       (pay ? (
                         <div className="rounded-lg border border-border p-3 space-y-2 text-sm">
                           <Select
-                            aria-label={`Customer for ${line.description}`}
+                            aria-label={`${moneyIn ? "Customer" : "Supplier"} for ${line.description}`}
                             className="w-64"
                             value={pay.contactId}
                             onChange={(e) =>
@@ -217,57 +237,57 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
                                 ...paying,
                                 [line.id]: {
                                   contactId: e.target.value,
-                                  invoiceIds: view.openInvoices.filter((i) => i.contactId === e.target.value).map((i) => i.id),
+                                  ids: docs.filter((d) => d.contactId === e.target.value).map((d) => d.id),
                                 },
                               })
                             }
                           >
-                            <option value="">Customer paying…</option>
-                            {customers.map(([id, name]) => (
+                            <option value="">{words.party}</option>
+                            {contacts.map(([id, name]) => (
                               <option key={id} value={id}>
                                 {name}
                               </option>
                             ))}
                           </Select>
-                          {payInvoices.map((i) => (
-                            <label key={i.id} className="flex items-center gap-2">
+                          {payDocs.map((d) => (
+                            <label key={d.id} className="flex items-center gap-2">
                               <input
                                 type="checkbox"
-                                checked={pay.invoiceIds.includes(i.id)}
+                                checked={pay.ids.includes(d.id)}
                                 onChange={(e) =>
                                   setPaying({
                                     ...paying,
                                     [line.id]: {
                                       ...pay,
-                                      invoiceIds: e.target.checked
-                                        ? payInvoices.filter((x) => x.id === i.id || pay.invoiceIds.includes(x.id)).map((x) => x.id)
-                                        : pay.invoiceIds.filter((x) => x !== i.id),
+                                      ids: e.target.checked
+                                        ? payDocs.filter((x) => x.id === d.id || pay.ids.includes(x.id)).map((x) => x.id)
+                                        : pay.ids.filter((x) => x !== d.id),
                                     },
                                   })
                                 }
                               />
                               <span>
-                                {i.number} · {formatDate(i.issueDate)} · {formatPence(i.amountDue)} owed
+                                {d.label} · {formatDate(d.issueDate)} · {formatPence(d.amountDue)} owed
                               </span>
                             </label>
                           ))}
-                          {pay.invoiceIds.length > 0 && (
+                          {pay.ids.length > 0 && (
                             <p className="text-xs text-muted-foreground">
-                              {payTotal === line.amount
-                                ? "Exactly what these invoices owe."
-                                : payTotal > line.amount
-                                  ? `The money covers the oldest first; ${formatPence(payTotal - line.amount)} of these stays owed.`
-                                  : `${formatPence(line.amount - payTotal)} more than these owe; the extra is kept as the customer's credit.`}
+                              {payTotal === size
+                                ? `Exactly what these ${words.docs} owe.`
+                                : payTotal > size
+                                  ? `The money covers the oldest first; ${formatPence(payTotal - size)} of these stays owed.`
+                                  : `${formatPence(size - payTotal)} more than these owe; the extra is kept as ${words.extra}.`}
                             </p>
                           )}
                           <div className="flex gap-2">
                             <Button
                               size="sm"
-                              disabled={busy || pay.invoiceIds.length === 0}
+                              disabled={busy || pay.ids.length === 0}
                               onClick={() =>
                                 send(
-                                  `${base}/invoices`,
-                                  { method: "POST", body: JSON.stringify({ statementLineId: line.id, invoiceIds: pay.invoiceIds }) },
+                                  `${base}/${words.endpoint}`,
+                                  { method: "POST", body: JSON.stringify({ statementLineId: line.id, [words.key]: pay.ids }) },
                                   "Payment recorded and matched."
                                 ).then((ok) => ok && setPaying({ ...paying, [line.id]: undefined }))
                               }
@@ -282,9 +302,9 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
                       ) : (
                         <Button
                           size="sm"
-                          onClick={() => setPaying({ ...paying, [line.id]: { contactId: "", invoiceIds: [] } })}
+                          onClick={() => setPaying({ ...paying, [line.id]: { contactId: "", ids: [] } })}
                         >
-                          Mark as customer payment…
+                          {words.start}
                         </Button>
                       ))}
 
@@ -338,16 +358,19 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
                           onClick={() => setCreating({ ...creating, [line.id]: { accountId: "", memo: "" } })}
                         >
                           {line.amount < 0
-                            ? "Spend money…"
+                            ? suppliers.length > 0
+                              ? "Other money out (not a bill)…"
+                              : "Spend money…"
                             : customers.length > 0
                               ? "Other money in (not an invoice)…"
                               : "Receive money…"}
                         </Button>
                       ))}
-                    {canReconcile && line.amount > 0 && customers.length > 0 && create && (
+                    {canReconcile && contacts.length > 0 && create && (
                       <p className="text-xs text-amber-700">
-                        Invoices already count as income. If this money pays one, cancel and mark it as a customer
-                        payment instead, or the income is counted twice.
+                        {moneyIn
+                          ? "Invoices already count as income. If this money pays one, cancel and mark it as a customer payment instead, or the income is counted twice."
+                          : "Bills already count as costs. If this money pays one, cancel and mark it as a supplier payment instead, or the cost is counted twice."}
                       </p>
                     )}
                   </CardContent>

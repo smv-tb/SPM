@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   namesCustomer,
   quotesInvoice,
+  quotesReference,
   significantWords,
   suggestMatches,
   type BookLineIn,
+  type OpenBillIn,
   type OpenInvoiceIn,
   type StatementLineIn,
 } from "@/lib/accounting/reconcile-match";
@@ -25,6 +27,15 @@ const book = (journalLineId: string, date: string, amount: number, text = ""): B
 const invoice = (id: string, number: string, amountDue: number, contactName = "Acme Frank Ltd"): OpenInvoiceIn => ({
   id,
   number,
+  contactId: `c-${contactName}`,
+  contactName,
+  amountDue,
+  issueDate: "2026-05-26",
+});
+
+const bill = (id: string, reference: string | null, amountDue: number, contactName = "Paper Mill Ltd"): OpenBillIn => ({
+  id,
+  reference,
   contactId: `c-${contactName}`,
   contactName,
   amountDue,
@@ -157,5 +168,56 @@ describe("suggestMatches — open invoices", () => {
     );
     expect(s.candidates.filter((c) => c.confidence === "HIGH")).toHaveLength(2);
     expect(s.auto).toBeNull();
+  });
+});
+
+describe("quotesReference", () => {
+  it("finds a supplier's reference, but not one too short to mean anything", () => {
+    expect(quotesReference("PAPER MILL INV-4471", "INV-4471")).toBe(true);
+    expect(quotesReference("PAPER MILL 4471", "4471")).toBe(true);
+    expect(quotesReference("PAPER MILL 12 JUNE", "12")).toBe(false);
+    expect(quotesReference("PAPER MILL", null)).toBe(false);
+  });
+});
+
+describe("suggestMatches — open bills", () => {
+  it("applies money out that quotes the bill and pays exactly what is due", () => {
+    const [s] = suggestMatches([line("s1", "2026-06-10", -14999, "PAPER MILL INV-4471")], [], [], [bill("b1", "INV-4471", 14999)]);
+    expect(s.auto?.kind === "BILL" && s.auto.billIds).toEqual(["b1"]);
+  });
+
+  it("never offers a bill for money in, or an invoice for money out", () => {
+    const [into] = suggestMatches([line("s1", "2026-06-10", 14999, "PAPER MILL INV-4471")], [], [], [bill("b1", "INV-4471", 14999)]);
+    expect(into.candidates).toEqual([]);
+    const [out] = suggestMatches([line("s1", "2026-06-10", -125000, "ACME FRANK INV001")], [], [invoice("i1", "INV001", 125000)], []);
+    expect(out.candidates).toEqual([]);
+  });
+
+  it("suggests, but does not apply, an exact amount that only names the supplier", () => {
+    const [s] = suggestMatches([line("s1", "2026-06-10", -14999, "PAPER MILL")], [], [], [bill("b1", null, 14999)]);
+    expect(s.candidates[0]).toMatchObject({ kind: "BILL", confidence: "MEDIUM" });
+    expect(s.auto).toBeNull();
+  });
+
+  it("finds one transfer paying several of a supplier's bills", () => {
+    const [s] = suggestMatches(
+      [line("s1", "2026-07-01", -30000, "PAPER MILL")],
+      [],
+      [],
+      [bill("b1", "A-1001", 20000), bill("b2", "A-1002", 10000), bill("b3", "A-1003", 5000)]
+    );
+    const combo = s.candidates.find((c) => c.kind === "BILL" && c.billIds.length === 2);
+    expect(combo?.kind === "BILL" && combo.billIds).toEqual(["b1", "b2"]);
+    expect(s.auto).toBeNull();
+  });
+
+  it("does not apply a bill two lines both want", () => {
+    const suggestions = suggestMatches(
+      [line("s1", "2026-06-10", -14999, "PAPER MILL INV-4471"), line("s2", "2026-06-11", -14999, "PAPER MILL INV-4471")],
+      [],
+      [],
+      [bill("b1", "INV-4471", 14999)]
+    );
+    expect(suggestions.every((s) => s.auto === null)).toBe(true);
   });
 });
