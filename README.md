@@ -43,7 +43,7 @@ Nothing here limits any right you have under the licence.
 - Posted entries are immutable; corrections are made by reversal, never by editing
 
 **For AI assistants**
-- An [MCP](https://modelcontextprotocol.io) server (about 60 tools) exposes the same data to an AI agent, over HTTP or stdio, authenticated with a bearer token
+- An [MCP](https://modelcontextprotocol.io) server (90 tools) exposes the same data to an AI agent, over HTTP or stdio, authenticated with a bearer token
 
 ## Security approach
 
