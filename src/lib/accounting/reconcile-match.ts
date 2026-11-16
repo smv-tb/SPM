@@ -6,7 +6,15 @@
  *    payment, a refund, a transfer) — same amount, close in date;
  *  - INVOICE: money in that pays one or more open invoices not yet recorded
  *    as paid — matching it records the payment and reconciles in one step;
- *  - BILL: the same for money out that pays one or more open supplier bills.
+ *  - BILL: the same for money out that pays one or more open supplier bills;
+ *  - CREATE: nothing in the books yet, but lines described like this one were
+ *    posted straight to an account before (bank charges, a subscription) —
+ *    matching posts the journal and reconciles in one step.
+ *
+ * The engine learns from what was reconciled earlier (`Learning`): which
+ * account lines with this description were posted to, and which customer or
+ * supplier they turned out to be. Nothing is stored for that — it is read
+ * from the reconciliations themselves, so unmatching a mistake unlearns it.
  *
  * Every candidate gets a confidence. Only HIGH is ever applied without a
  * person looking, and only when nothing competes for the same line or the
@@ -86,7 +94,40 @@ export type Candidate =
       confidence: Confidence;
       score: number;
       reasons: string[];
+    }
+  | {
+      /** Post the line straight to an account, as was done before. */
+      kind: "CREATE";
+      accountId: string;
+      label: string;
+      /** How many of the recent lines like this one went to that account. */
+      uses: number;
+      confidence: Confidence;
+      score: number;
+      reasons: string[];
     };
+
+/** A statement line reconciled earlier, and what it turned out to be. */
+export type PastMatch = {
+  description: string;
+  /** Signed, as on the statement: money in positive. */
+  amount: Pence;
+} & (
+  | { kind: "ACCOUNT"; accountId: string } // posted straight to this account
+  | { kind: "CONTACT"; contactId: string } // a payment from or to this contact
+);
+
+export interface Learning {
+  /** Most recent first. */
+  past: PastMatch[];
+  /** The accounts a line may be posted to today. A habit of posting anywhere else is not offered. */
+  accounts: { id: string; label: string }[];
+}
+
+/** A habit is trusted without a person once it has been followed this many times… */
+export const LEARN_MIN_USES = 2;
+/** …with no exception among this many of the most recent lines like it. */
+export const LEARN_LOOKBACK = 5;
 
 export interface Suggestion {
   statementLineId: string;
@@ -117,6 +158,82 @@ export function significantWords(text: string): string[] {
         .filter((w) => w.length >= 3 && !NOISE.has(w) && !/^\d+$/.test(w))
     ),
   ];
+}
+
+/**
+ * What a description says once the parts that change every time are gone:
+ * "DD GOOGLE WORKSPACE 39281 12NOV" and next month's are the same key. Words
+ * carrying digits (references, dates, card numbers) are dropped. Empty when
+ * nothing distinctive is left — such a line teaches nothing.
+ */
+export function descriptionKey(description: string): string {
+  return significantWords(description)
+    .filter((w) => !/\d/.test(w))
+    .sort()
+    .join(" ");
+}
+
+/** Money in and money out under one description are different habits. */
+function habitKey(description: string, amount: Pence): string | null {
+  const key = descriptionKey(description);
+  return key && amount !== 0 ? `${amount > 0 ? "IN" : "OUT"}:${key}` : null;
+}
+
+/** The most recent lines like each description, newest first. */
+function recentByHabit(past: PastMatch[]): Map<string, PastMatch[]> {
+  const index = new Map<string, PastMatch[]>();
+  for (const match of past) {
+    const key = habitKey(match.description, match.amount);
+    if (!key) continue;
+    const list = index.get(key) ?? [];
+    if (list.length < LEARN_LOOKBACK) list.push(match);
+    index.set(key, list);
+  }
+  return index;
+}
+
+const times = (n: number) => (n === 1 ? "once" : `${n} times`);
+
+/** The customer or supplier every recent line like this one turned out to be. */
+function learnedContact(recent: PastMatch[]): { contactId: string; uses: number } | null {
+  const [first] = recent;
+  if (!first || first.kind !== "CONTACT") return null;
+  const same = recent.every((m) => m.kind === "CONTACT" && m.contactId === first.contactId);
+  return same ? { contactId: first.contactId, uses: recent.length } : null;
+}
+
+/**
+ * Lines like this one were posted straight to an account before. Sure only
+ * when it has happened at least twice and never differently among the recent
+ * ones; a habit that changed is shown, newest choice first, for a person.
+ */
+function createCandidates(recent: PastMatch[], accounts: Map<string, string>): Candidate[] {
+  const out: Candidate[] = [];
+  const seen = new Set<string>();
+  for (const match of recent) {
+    if (match.kind !== "ACCOUNT" || seen.has(match.accountId)) continue;
+    seen.add(match.accountId);
+    const label = accounts.get(match.accountId);
+    if (!label) continue;
+    const uses = recent.filter((m) => m.kind === "ACCOUNT" && m.accountId === match.accountId).length;
+    const always = uses === recent.length;
+    out.push({
+      kind: "CREATE",
+      accountId: match.accountId,
+      label: `Post to ${label}`,
+      uses,
+      confidence: always && uses >= LEARN_MIN_USES ? "HIGH" : match === recent[0] ? "MEDIUM" : "LOW",
+      score: 20 + uses * 5,
+      reasons: [
+        always
+          ? uses === 1
+            ? "Posted there the last time a line like this appeared"
+            : `Posted there the last ${uses} times a line like this appeared`
+          : `Posted there ${uses} of the last ${recent.length} times a line like this appeared`,
+      ],
+    });
+  }
+  return out;
 }
 
 /**
@@ -185,7 +302,13 @@ function exactCombinations<T extends { amountDue: Pence }>(documents: T[], amoun
   return found;
 }
 
-function invoiceCandidates(line: StatementLineIn, invoices: OpenInvoiceIn[]): Candidate[] {
+/** Why a combination is this contact's: the bank names them, or earlier matches do. */
+const who = (line: StatementLineIn, name: string) =>
+  namesCustomer(line.description, name) ? `Names ${name}` : `Lines like this were ${name} before`;
+
+type Known = { contactId: string; uses: number } | null;
+
+function invoiceCandidates(line: StatementLineIn, invoices: OpenInvoiceIn[], known: Known): Candidate[] {
   if (line.amount <= 0) return [];
   const open = invoices.filter((i) => i.amountDue > 0 && i.issueDate <= line.date);
   const out: Candidate[] = [];
@@ -193,30 +316,35 @@ function invoiceCandidates(line: StatementLineIn, invoices: OpenInvoiceIn[]): Ca
   for (const invoice of open) {
     const quoted = quotesInvoice(line.description, invoice.number);
     const named = namesCustomer(line.description, invoice.contactName);
+    const learned = known?.contactId === invoice.contactId ? known.uses : 0;
     const exact = invoice.amountDue === line.amount;
     if (!exact && !quoted) continue;
     const reasons: string[] = [];
     if (exact) reasons.push("Pays exactly what is due");
     if (quoted) reasons.push(`Quotes ${invoice.number}`);
     if (named) reasons.push(`Names ${invoice.contactName}`);
+    if (learned) reasons.push(`Lines like this were ${invoice.contactName} ${times(learned)} before`);
     // A quoted number with a different amount is a part payment or an
-    // overpayment: worth showing, never automatic.
-    const confidence: Confidence = exact && quoted ? "HIGH" : exact && named ? "MEDIUM" : "LOW";
+    // overpayment: worth showing, never automatic. A payer recognised from
+    // earlier matches is as good as a quoted number once it has held twice.
+    const confidence: Confidence =
+      exact && (quoted || learned >= LEARN_MIN_USES) ? "HIGH" : exact && (named || learned) ? "MEDIUM" : "LOW";
     out.push({
       kind: "INVOICE",
       invoiceIds: [invoice.id],
       contactId: invoice.contactId,
       label: `Payment for ${invoice.number} — ${invoice.contactName}`,
       confidence,
-      score: (exact ? 50 : 0) + (quoted ? 40 : 0) + (named ? 20 : 0),
+      score: (exact ? 50 : 0) + (quoted ? 40 : 0) + (named ? 20 : 0) + (learned ? 20 : 0),
       reasons,
     });
   }
 
-  // One transfer paying several invoices of one customer the bank names.
+  // One transfer paying several invoices of one customer the bank names, or
+  // that lines like this one were matched to before.
   const byCustomer = new Map<string, OpenInvoiceIn[]>();
   for (const invoice of open) {
-    if (!namesCustomer(line.description, invoice.contactName)) continue;
+    if (!namesCustomer(line.description, invoice.contactName) && known?.contactId !== invoice.contactId) continue;
     byCustomer.set(invoice.contactId, [...(byCustomer.get(invoice.contactId) ?? []), invoice]);
   }
   for (const [contactId, theirs] of byCustomer) {
@@ -229,7 +357,7 @@ function invoiceCandidates(line: StatementLineIn, invoices: OpenInvoiceIn[]): Ca
         label: `Payment for ${combo.map((i) => i.number).join(" + ")} — ${combo[0].contactName}`,
         confidence: allQuoted ? "HIGH" : "MEDIUM",
         score: 45 + (allQuoted ? 40 : 0),
-        reasons: ["Pays exactly what is due on all of them", `Names ${combo[0].contactName}`, ...(allQuoted ? ["Quotes every number"] : [])],
+        reasons: ["Pays exactly what is due on all of them", who(line, combo[0].contactName), ...(allQuoted ? ["Quotes every number"] : [])],
       });
     }
   }
@@ -248,7 +376,7 @@ export function quotesReference(description: string, reference: string | null): 
 const billName = (bill: OpenBillIn) => bill.reference ?? `bill of ${bill.issueDate}`;
 
 /** Money out that pays supplier bills: the same evidence as invoices, mirrored. */
-function billCandidates(line: StatementLineIn, bills: OpenBillIn[]): Candidate[] {
+function billCandidates(line: StatementLineIn, bills: OpenBillIn[], known: Known): Candidate[] {
   if (line.amount >= 0) return [];
   const paid = -line.amount;
   const open = bills.filter((b) => b.amountDue > 0 && b.issueDate <= line.date);
@@ -257,28 +385,32 @@ function billCandidates(line: StatementLineIn, bills: OpenBillIn[]): Candidate[]
   for (const bill of open) {
     const quoted = quotesReference(line.description, bill.reference);
     const named = namesCustomer(line.description, bill.contactName);
+    const learned = known?.contactId === bill.contactId ? known.uses : 0;
     const exact = bill.amountDue === paid;
     if (!exact && !quoted) continue;
     const reasons: string[] = [];
     if (exact) reasons.push("Pays exactly what is due");
     if (quoted) reasons.push(`Quotes ${bill.reference}`);
     if (named) reasons.push(`Names ${bill.contactName}`);
-    const confidence: Confidence = exact && quoted ? "HIGH" : exact && named ? "MEDIUM" : "LOW";
+    if (learned) reasons.push(`Lines like this were ${bill.contactName} ${times(learned)} before`);
+    const confidence: Confidence =
+      exact && (quoted || learned >= LEARN_MIN_USES) ? "HIGH" : exact && (named || learned) ? "MEDIUM" : "LOW";
     out.push({
       kind: "BILL",
       billIds: [bill.id],
       contactId: bill.contactId,
       label: `Pays ${billName(bill)} — ${bill.contactName}`,
       confidence,
-      score: (exact ? 50 : 0) + (quoted ? 40 : 0) + (named ? 20 : 0),
+      score: (exact ? 50 : 0) + (quoted ? 40 : 0) + (named ? 20 : 0) + (learned ? 20 : 0),
       reasons,
     });
   }
 
-  // One transfer paying several bills of one supplier the bank names.
+  // One transfer paying several bills of one supplier the bank names, or
+  // that lines like this one were matched to before.
   const bySupplier = new Map<string, OpenBillIn[]>();
   for (const bill of open) {
-    if (!namesCustomer(line.description, bill.contactName)) continue;
+    if (!namesCustomer(line.description, bill.contactName) && known?.contactId !== bill.contactId) continue;
     bySupplier.set(bill.contactId, [...(bySupplier.get(bill.contactId) ?? []), bill]);
   }
   for (const [contactId, theirs] of bySupplier) {
@@ -291,7 +423,7 @@ function billCandidates(line: StatementLineIn, bills: OpenBillIn[]): Candidate[]
         label: `Pays ${combo.map(billName).join(" + ")} — ${combo[0].contactName}`,
         confidence: allQuoted ? "HIGH" : "MEDIUM",
         score: 45 + (allQuoted ? 40 : 0),
-        reasons: ["Pays exactly what is due on all of them", `Names ${combo[0].contactName}`, ...(allQuoted ? ["Quotes every reference"] : [])],
+        reasons: ["Pays exactly what is due on all of them", who(line, combo[0].contactName), ...(allQuoted ? ["Quotes every reference"] : [])],
       });
     }
   }
@@ -306,21 +438,39 @@ const RANK: Record<Confidence, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
  * no other line's HIGH candidate wants. A book entry that is the line's only
  * candidate and wants no other line is promoted to HIGH when the dates are
  * close: the same amount, alone, within a few days.
+ *
+ * A learned posting (CREATE) puts new money in the books, so it is only safe
+ * when nothing else could be this line: with any book entry, invoice or bill
+ * in the running it is shown, never applied — posting it too would count the
+ * money twice.
  */
 export function suggestMatches(
   lines: StatementLineIn[],
   books: BookLineIn[],
   invoices: OpenInvoiceIn[],
-  bills: OpenBillIn[] = []
+  bills: OpenBillIn[] = [],
+  learning: Learning = { past: [], accounts: [] }
 ): Suggestion[] {
-  const raw = lines.map((line) => ({
-    line,
-    candidates: [
+  const habits = recentByHabit(learning.past);
+  const accounts = new Map(learning.accounts.map((a) => [a.id, a.label]));
+  const raw = lines.map((line) => {
+    const recent = habits.get(habitKey(line.description, line.amount) ?? "") ?? [];
+    const known = learnedContact(recent);
+    const existing = [
       ...bookCandidates(line, books),
-      ...invoiceCandidates(line, invoices),
-      ...billCandidates(line, bills),
-    ],
-  }));
+      ...invoiceCandidates(line, invoices, known),
+      ...billCandidates(line, bills, known),
+    ];
+    const learned = createCandidates(recent, accounts);
+    if (existing.length > 0) {
+      for (const c of learned) {
+        if (c.confidence !== "HIGH") continue;
+        c.confidence = "MEDIUM";
+        c.reasons.push("Check the other matches first: one of them may already be this money");
+      }
+    }
+    return { line, existing, candidates: [...existing, ...learned] };
+  });
 
   // Which lines each book entry could be: an entry wanted by two lines is
   // ambiguous for both.
@@ -330,10 +480,10 @@ export function suggestMatches(
       for (const key of keysOf(c)) wantedBy.set(key, (wantedBy.get(key) ?? 0) + 1);
     }
   }
-  for (const { candidates } of raw) {
-    const [only] = candidates;
+  for (const { existing } of raw) {
+    const [only] = existing;
     if (
-      candidates.length === 1 &&
+      existing.length === 1 &&
       only.kind === "BOOK" &&
       only.confidence !== "HIGH" &&
       only.days <= 5 &&
@@ -361,6 +511,7 @@ export function suggestMatches(
 }
 
 function keysOf(c: Candidate): string[] {
+  if (c.kind === "CREATE") return []; // claims nothing that already exists
   if (c.kind === "BOOK") return c.journalLineIds.map((id) => `book:${id}`);
   if (c.kind === "BILL") return c.billIds.map((id) => `bill:${id}`);
   return c.invoiceIds.map((id) => `inv:${id}`);
