@@ -1,6 +1,7 @@
 import { createServer, request } from "node:http";
 import { parse } from "node:url";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { parseTrustedProxies, resolveClientIp } from "./trusted-proxy.mjs";
 
@@ -12,9 +13,14 @@ const RELOAD_SCRIPT = "self.__nextStaleAsset=1;location.reload(!0)";
 let childStdout = "";
 let childStderr = "";
 
+// Proves to the app that a request came through this wrapper (src/lib/client-ip.ts
+// believes X-Real-IP only when it carries this). Taken from the environment when
+// set, otherwise new each boot; never logged, and handed to Next only via its env.
+const WRAPPER_TOKEN = process.env.SMARTVIE_WRAPPER_TOKEN || randomBytes(32).toString("base64url");
+
 const original = spawn("node", ["server.js"], {
   stdio: ["inherit", "pipe", "pipe"],
-  env: { ...process.env, PORT: "3001" },
+  env: { ...process.env, PORT: "3001", SMARTVIE_WRAPPER_TOKEN: WRAPPER_TOKEN },
 });
 
 original.stdout.on("data", (data) => {
@@ -111,7 +117,10 @@ if (TRUSTED_PROXIES.size === 0) {
   );
 }
 
-/** The client's headers, with X-Real-IP overwritten by the address we trust. */
+/**
+ * The client's headers, with X-Real-IP overwritten by the address we trust and
+ * the wrapper marker overwritten by ours (a client-sent one never survives).
+ */
 function forwardedHeaders(clientReq) {
   return {
     ...clientReq.headers,
@@ -120,6 +129,7 @@ function forwardedHeaders(clientReq) {
       clientReq.headers["x-forwarded-for"],
       TRUSTED_PROXIES
     ),
+    "x-smartvie-wrapper": WRAPPER_TOKEN,
   };
 }
 
