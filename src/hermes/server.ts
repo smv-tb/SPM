@@ -21,6 +21,7 @@ export const HERMES_INSTRUCTIONS = [
   "- Batches: task_bulk_update and living_lab_cost_bulk_delete are atomic and take up to 200 items per call; both support dryRun.",
   `- Rate limit: ${HERMES_RATE_LIMIT.max} HTTP requests per ${HERMES_RATE_LIMIT.windowMs / 1000}s per client IP, shared by all tool calls (a bulk call counts once). Over the limit, requests get HTTP 429 with JSON-RPC error -32029 and Retry-After set to the seconds left in the window.`,
   "- Validation errors come back as { error, details } in the tool result; -32602 means invalid params or a record that does not exist.",
+  "- Journals: ledger_account_list is the chart of accounts; journal_create writes a manual journal (a draft unless post: true), journal_post posts a draft, journal_list / journal_get read them. Amounts you send are pounds as written (\"125.50\"); amounts in results are integer pence (12550). A line has a debit or a credit, never both. Posted journals are permanent: they cannot be edited or deleted. A refused journal comes back as { error, code, problems } naming the lines at fault.",
   "- Bank reconciliation: use reconciliation_bank_accounts to list accounts, reconciliation_view for the full reconcile screen, reconciliation_create to match statement lines to book entries, reconciliation_with_invoices to record a receipt paying open invoices, reconciliation_create_and_reconcile to post a journal for uncategorised money, reconciliation_unreconcile to undo a match, and reconciliation_auto to apply safe suggestions automatically.",
 ].join("\n");
 
