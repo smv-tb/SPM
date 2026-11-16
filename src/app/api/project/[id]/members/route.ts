@@ -15,6 +15,7 @@ import { MEMBER_ROLES } from "@/lib/project-membership";
 type RouteContext = { params: Promise<{ id: string }> };
 
 const putSchema = z.object({ userId: z.string().min(1).max(100), role: z.enum(MEMBER_ROLES) });
+const deleteSchema = z.object({ reason: z.string().trim().max(500).optional() });
 
 /** Who can open this project. Admins reach every project and are not listed. */
 export const GET = withErrorHandler(async (_req: NextRequest, { params }: RouteContext) => {
@@ -53,18 +54,29 @@ export const PUT = withErrorHandler(async (req: NextRequest, { params }: RouteCo
   }
 });
 
+/**
+ * Removes a member. Revoking access is the containment step in an incident, so
+ * it is no cheaper with a stolen session than granting it: same second-factor
+ * check as PUT. An optional `{ reason }` body is kept in the audit row.
+ */
 export const DELETE = withErrorHandler(async (req: NextRequest, { params }: RouteContext) => {
   const session = await auth();
   if (!session?.user?.id) return apiError("Unauthorized", 401);
   if (!hasPermission(session, "project:members")) return apiError("Forbidden", 403);
   const { id } = await params;
   await requireProjectAccess(session, id, "project:members");
+  const refusal = await stepUpGuard(session);
+  if (refusal) return refusal;
 
   const userId = req.nextUrl.searchParams.get("userId");
   if (!userId) return apiError("userId is required", 400);
+  const parsed = deleteSchema.safeParse((await req.json().catch(() => null)) ?? {});
+  if (!parsed.success) return NextResponse.json({ error: "Invalid request data", details: parsed.error.flatten() }, { status: 400 });
 
   const removed = await prisma.$transaction((tx) =>
-    removeMember(tx, { projectId: id, userId, actor: actorFromSession(session), ipAddress: requestIp(req) })
+    removeMember(tx, {
+      projectId: id, userId, actor: actorFromSession(session), ipAddress: requestIp(req), reason: parsed.data.reason ?? null,
+    })
   );
   return removed ? NextResponse.json({ ok: true }) : apiError("That person is not a member", 404);
 });
