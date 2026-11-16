@@ -66,6 +66,7 @@ const PROJECT_ROUTES = [
   "custom-fields/values/route.ts", "custom-fields/values/[id]/route.ts",
   "dashboard/route.ts",
   "project/route.ts", "project/[id]/route.ts", "project/[id]/archive/route.ts",
+  "project/[id]/members/route.ts",
 ];
 
 /** Handlers in those files that act on nothing project-owned, with the reason. */
@@ -160,7 +161,12 @@ describe("API route guards", () => {
     // A new route that reads or writes project-owned data without being listed here is the gap this catches.
     const touching = [...ids].filter((file) => {
       const src = readFileSync(join(API, file), "utf8");
-      return /prisma\.(task|milestone|phase|tag|resource|fundingRecord|fundingTranche|livingLab|livingLabCost|customFieldDefinition|customFieldValue)\./.test(src);
+      // Membership is project data too: who can open a project. Routes usually reach it
+      // through the project-members service rather than prisma directly, so match both.
+      return (
+        /prisma\.(task|milestone|phase|tag|resource|fundingRecord|fundingTranche|livingLab|livingLabCost|customFieldDefinition|customFieldValue|projectMember)\./.test(src) ||
+        /from "@\/lib\/project-members"/.test(src)
+      );
     });
     const unlisted = touching.filter((f) => !PROJECT_ROUTES.includes(f));
     expect(unlisted, "these routes touch project data but are not on PROJECT_ROUTES").toEqual([]);

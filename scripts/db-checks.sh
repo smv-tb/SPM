@@ -46,6 +46,7 @@ svc reconciliation-service.ts
 svc hermes-journals.ts
 svc bill-service.ts
 svc supplier-payment-service.ts
+svc card-statement-service.ts
 svc balance-sheet.ts
 svc profit-and-loss.ts
 sql contact-anonymisation.sql

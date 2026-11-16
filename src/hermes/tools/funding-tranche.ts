@@ -4,6 +4,7 @@ import { summarizeTranches } from "@/lib/funding";
 import { HERMES_ACTOR, recordAudit } from "@/lib/audit";
 import { tryCatchTool, createToolResponse, defineTool } from "../errors";
 import { PATCH_NOTE, diffFields } from "./_shared";
+import { ALREADY_RECEIVED, RECEIVABLE_STATUSES, receiveTranche } from "@/lib/funding-tranches";
 
 export function registerFundingTrancheTools(
   handlers: Map<string, (args: Record<string, unknown>) => Promise<unknown>>
@@ -31,7 +32,7 @@ export function registerFundingTrancheTools(
         label: { type: "string" },
         amount: { type: "number" },
         dueDate: { type: "string" },
-        status: { type: "string", enum: ["PENDING", "RECEIVED", "DELAYED"] },
+        status: { type: "string", enum: ["PENDING", "DELAYED"], description: "Use tranche_receive to mark it received" },
         direction: { type: "string", enum: ["INCOMING", "OUTGOING"] },
         milestoneId: { type: "string" },
       },
@@ -48,7 +49,7 @@ export function registerFundingTrancheTools(
           const created = await tx.fundingTranche.create({
             data: {
               fundingRecordId: data.fundingRecordId, label: data.label, amount: data.amount, dueDate: data.dueDate,
-              receivedDate: data.receivedDate ?? null, status: data.status, direction: data.direction, milestoneId: data.milestoneId ?? null,
+              status: data.status, direction: data.direction, milestoneId: data.milestoneId ?? null,
             },
           });
           await recordAudit(tx, {
@@ -70,8 +71,7 @@ export function registerFundingTrancheTools(
         label: { type: "string" },
         amount: { type: "number" },
         dueDate: { type: "string" },
-        receivedDate: { type: "string" },
-        status: { type: "string", enum: ["PENDING", "RECEIVED", "DELAYED"] },
+        status: { type: "string", enum: ["PENDING", "DELAYED"], description: "Refused once the tranche is received" },
         direction: { type: "string", enum: ["INCOMING", "OUTGOING"] },
         milestoneId: { type: "string" },
       },
@@ -83,15 +83,17 @@ export function registerFundingTrancheTools(
         const validation = fundingTrancheUpdateSchema.safeParse(args);
         if (!validation.success) return createToolResponse({ error: "Validation failed", details: validation.error.flatten() });
         const data = validation.data;
-        // Moving off RECEIVED drops the receipt date with it — see the matching
-        // guard in the PUT route; a stale receivedDate double-counts cash in.
-        if (data.status !== undefined && data.status !== "RECEIVED" && data.receivedDate === undefined) {
-          data.receivedDate = null;
-        }
+        // Same rule as the PUT route: a received tranche's status is final here.
         const tranche = await prisma.$transaction(async (tx) => {
           const existing = await tx.fundingTranche.findUnique({ where: { id } });
           if (!existing) return null;
-          const updated = await tx.fundingTranche.update({ where: { id }, data });
+          if (data.status !== undefined && existing.status === "RECEIVED") return "received" as const;
+          const { count } = await tx.fundingTranche.updateMany({
+            where: data.status !== undefined ? { id, status: { in: [...RECEIVABLE_STATUSES] } } : { id },
+            data,
+          });
+          if (count === 0) return "received" as const;
+          const updated = await tx.fundingTranche.findUniqueOrThrow({ where: { id } });
           await recordAudit(tx, {
             actor: HERMES_ACTOR, action: "tranche.update", entityType: "FundingTranche", entityId: id,
             before: existing, after: updated,
@@ -99,6 +101,7 @@ export function registerFundingTrancheTools(
           return { ...updated, changes: diffFields(existing, updated) };
         });
         if (!tranche) return createToolResponse({ error: "Tranche not found" });
+        if (tranche === "received") return createToolResponse(ALREADY_RECEIVED);
         return createToolResponse(tranche);
       });
     }
@@ -126,28 +129,26 @@ export function registerFundingTrancheTools(
   ));
 
   handlers.set("tranche_receive", defineTool(
-    "Mark a tranche as received",
+    "Mark a tranche as received. Once only: a tranche already received is refused (ALREADY_RECEIVED), so its receipt date cannot be moved.",
     { type: "object", properties: { id: { type: "string" }, receivedDate: { type: "string" } }, required: ["id"] },
     async (args) => {
       return tryCatchTool(async () => {
         const id = String(args.id);
         const validation = fundingTrancheReceiveSchema.safeParse(args);
         if (!validation.success) return createToolResponse({ error: "Validation failed", details: validation.error.flatten() });
-        const tranche = await prisma.$transaction(async (tx) => {
-          const existing = await tx.fundingTranche.findUnique({ where: { id } });
-          if (!existing) return null;
-          const updated = await tx.fundingTranche.update({
-            where: { id },
-            data: { status: "RECEIVED", receivedDate: validation.data.receivedDate ?? new Date() },
-          });
-          await recordAudit(tx, {
-            actor: HERMES_ACTOR, action: "tranche.receive", entityType: "FundingTranche", entityId: id,
-            before: existing, after: updated,
-          });
-          return { ...updated, changes: diffFields(existing, updated) };
+        const result = await prisma.$transaction(async (tx) => {
+          const outcome = await receiveTranche(tx, id, validation.data.receivedDate ?? new Date());
+          if (outcome.kind === "received") {
+            await recordAudit(tx, {
+              actor: HERMES_ACTOR, action: "tranche.receive", entityType: "FundingTranche", entityId: id,
+              before: outcome.before, after: outcome.after,
+            });
+          }
+          return outcome;
         });
-        if (!tranche) return createToolResponse({ error: "Tranche not found" });
-        return createToolResponse(tranche);
+        if (result.kind === "not_found") return createToolResponse({ error: "Tranche not found" });
+        if (result.kind === "already_received") return createToolResponse(ALREADY_RECEIVED);
+        return createToolResponse({ ...result.after, changes: diffFields(result.before, result.after) });
       });
     }
   ));

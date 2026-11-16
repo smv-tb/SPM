@@ -163,7 +163,7 @@ export function registerReconciliationTools(
   ));
 
   handlers.set("reconciliation_bank_accounts", defineTool(
-    "List all bank accounts with their ledger account details, statement line counts (total and unreconciled), and latest balance.",
+    "List all bank accounts and company credit cards (kind BANK or CREDIT_CARD) with their ledger account details, statement line counts (total and unreconciled), and latest balance. A card's balance is negative while money is owed on it.",
     {
       type: "object",
       properties: {},
@@ -190,8 +190,11 @@ export function registerReconciliationTools(
             return {
               id: a.id,
               name: a.name,
+              kind: a.kind,
               sortCode: a.sortCode,
-              accountNumberMasked: maskNumber(openNumber(a.accountNumber, bankAccountNumberContext(a.id))),
+              accountNumberMasked:
+                a.accountNumber === null ? null : maskNumber(openNumber(a.accountNumber, bankAccountNumberContext(a.id))),
+              cardLastFour: a.cardLastFour,
               ledgerAccount: a.ledgerAccount,
               totalLines: a._count.lines,
               unreconciledLines: unreconciled,

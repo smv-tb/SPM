@@ -53,9 +53,13 @@ export function BankAccountClient({ account, lines, total, page, pageSize, impor
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const lastPage = Math.max(1, Math.ceil(total / pageSize));
+  // A card's balance is held negative while money is owed on it; people read
+  // it the other way round, as what is owed.
+  const isCard = account.kind === "CREDIT_CARD";
+  const shown = (pence: number) => formatPence(isCard && pence !== 0 ? -pence : pence);
   const difference =
     account.statementBalance !== null && account.statementBalance !== undefined
-      ? account.statementBalance - (account.booksBalance ?? 0)
+      ? (account.statementBalance - (account.booksBalance ?? 0)) * (isCard ? -1 : 1)
       : null;
 
   async function undo(id: string, fileName: string) {
@@ -76,7 +80,7 @@ export function BankAccountClient({ account, lines, total, page, pageSize, impor
     <>
       <Topbar
         title={account.name}
-        subtitle={`${account.sortCode} · ${account.accountNumberMasked} · books to ${account.ledgerAccountCode} ${account.ledgerAccountName}`}
+        subtitle={`${account.details} · books to ${account.ledgerAccountCode} ${account.ledgerAccountName}`}
         breadcrumbs={[
           { label: "Books", href: "/books" },
           { label: "Bank", href: "/books/bank" },
@@ -102,21 +106,29 @@ export function BankAccountClient({ account, lines, total, page, pageSize, impor
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <Card>
             <CardContent className="p-5">
-              <p className="text-xs uppercase tracking-wider text-muted-foreground">Statement balance</p>
+              <p className="text-xs uppercase tracking-wider text-muted-foreground">
+                {isCard ? "Owed per statement" : "Statement balance"}
+              </p>
               <p className="text-xl font-semibold tabular-nums">
                 {account.statementBalance !== null && account.statementBalance !== undefined
-                  ? formatPence(account.statementBalance)
+                  ? shown(account.statementBalance)
                   : "—"}
               </p>
               <p className="text-xs text-muted-foreground">
-                {account.statementDate ? `as at ${formatDate(account.statementDate)}` : "No statement imported yet"}
+                {account.statementDate
+                  ? `as at ${formatDate(account.statementDate)}`
+                  : (account.unreconciled ?? 0) > 0 || lines.length > 0
+                    ? "The statement file carries no balance"
+                    : "No statement imported yet"}
               </p>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="p-5">
-              <p className="text-xs uppercase tracking-wider text-muted-foreground">Books balance</p>
-              <p className="text-xl font-semibold tabular-nums">{formatPence(account.booksBalance ?? 0)}</p>
+              <p className="text-xs uppercase tracking-wider text-muted-foreground">
+                {isCard ? "Owed per books" : "Books balance"}
+              </p>
+              <p className="text-xl font-semibold tabular-nums">{shown(account.booksBalance ?? 0)}</p>
               <p className="text-xs text-muted-foreground">
                 {difference === null || difference === 0
                   ? "All postings to date"
@@ -199,7 +211,11 @@ export function BankAccountClient({ account, lines, total, page, pageSize, impor
               <EmptyState
                 icon={FileUp}
                 title="No statement lines yet"
-                description="Export a statement from Lloyds online banking as CSV, then import it here."
+                description={
+                  isCard
+                    ? "Export the card's transactions from the card provider as CSV, then import them here."
+                    : "Export a statement from Lloyds online banking as CSV, then import it here."
+                }
               />
             ) : (
               <table className="w-full text-sm">
@@ -227,7 +243,7 @@ export function BankAccountClient({ account, lines, total, page, pageSize, impor
                         {formatPence(l.amount)}
                       </td>
                       <td className="px-5 py-2 text-right tabular-nums text-muted-foreground">
-                        {l.balance === null ? "" : formatPence(l.balance)}
+                        {l.balance === null ? "" : shown(l.balance)}
                       </td>
                     </tr>
                   ))}

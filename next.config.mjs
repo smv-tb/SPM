@@ -6,6 +6,8 @@ const { version } = JSON.parse(readFileSync(new URL("./package.json", import.met
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  // No "X-Powered-By: Next.js" (pentest F-05): no need to advertise the framework.
+  poweredByHeader: false,
   // Inlined at build time, so a running server and the page it served each know their own version.
   env: { NEXT_PUBLIC_APP_VERSION: version },
   // Next 16.3+ appends its own block to AGENTS.md on every `next dev`; this repo keeps its own.

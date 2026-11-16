@@ -23,12 +23,19 @@ export const STATEMENT_FIELDS = [
   "description",
   "debit",
   "credit",
+  "amount",
   "balance",
 ] as const;
 export type StatementField = (typeof STATEMENT_FIELDS)[number];
 
-/** Fields a statement must have; the rest are used when present. */
-export const REQUIRED_FIELDS: readonly StatementField[] = ["date", "description", "debit", "credit"];
+/**
+ * Fields a statement must have; the rest are used when present. Amounts come
+ * either as separate money-out and money-in columns (Lloyds' bank export) or
+ * as one signed column (most credit card exports) — never both.
+ */
+export function requiredFields(profile: Pick<ImportProfile, "columns">): readonly StatementField[] {
+  return profile.columns.amount ? ["date", "description", "amount"] : ["date", "description", "debit", "credit"];
+}
 
 export const FIELD_LABEL: Record<StatementField, string> = {
   date: "Date",
@@ -38,6 +45,7 @@ export const FIELD_LABEL: Record<StatementField, string> = {
   description: "Description",
   debit: "Money out",
   credit: "Money in",
+  amount: "Amount (one column)",
   balance: "Balance",
 };
 
@@ -48,11 +56,26 @@ export type DateFormat = (typeof DATE_FORMATS)[number];
 export const NUMBER_FORMATS = ["UK", "EU"] as const;
 export type NumberFormat = (typeof NUMBER_FORMATS)[number];
 
+/**
+ * What a positive number in a single amount column means. Banks write money
+ * received as positive; card statements usually write a purchase as positive.
+ * Never inferred: with one amount column it must be chosen.
+ */
+export const AMOUNT_SIGNS = ["IN_POSITIVE", "OUT_POSITIVE"] as const;
+export type AmountSign = (typeof AMOUNT_SIGNS)[number];
+
 export interface ImportProfile {
   /** Header name for each field; null when the file has no such column. */
   columns: Partial<Record<StatementField, string | null>>;
   dateFormat: DateFormat;
   numberFormat: NumberFormat;
+  /** Used only with a single amount column; null until someone has chosen. */
+  amountSign?: AmountSign | null;
+  /**
+   * The balance column is the amount owed (a credit card), so it is held with
+   * its sign turned: money we owe is a negative balance, as in the books.
+   */
+  balanceOwed?: boolean;
 }
 
 /** Lloyds' statement export, as the business's own file headers it. */
@@ -69,19 +92,53 @@ export const LLOYDS_PROFILE: ImportProfile = {
   },
   dateFormat: "DD/MM/YYYY",
   numberFormat: "UK",
+  amountSign: null,
+  balanceOwed: false,
 };
 
-/** Reads a stored profile, falling back to Lloyds for anything missing or malformed. */
-export function profileFrom(stored: unknown): ImportProfile {
+/**
+ * The company card's activity export, as the business's own file headers it:
+ * `Date, Description, Amount`, DD/MM/YYYY, newest first, a purchase or fee
+ * positive and "PAYMENT RECEIVED" negative, no balance column. Another
+ * issuer's file is remapped on the import screen (where the sign is shown and
+ * can be turned), and what worked is remembered for that card.
+ */
+export const CARD_PROFILE: ImportProfile = {
+  columns: {
+    date: "Date",
+    type: null,
+    sortCode: null,
+    accountNumber: null,
+    description: "Description",
+    debit: null,
+    credit: null,
+    amount: "Amount",
+    balance: null,
+  },
+  dateFormat: "DD/MM/YYYY",
+  numberFormat: "UK",
+  amountSign: "OUT_POSITIVE",
+  balanceOwed: false,
+};
+
+/** Reads a stored profile, falling back to `fallback` (Lloyds) for anything missing or malformed. */
+export function profileFrom(stored: unknown, fallback: ImportProfile = LLOYDS_PROFILE): ImportProfile {
   const value = (stored ?? {}) as Partial<ImportProfile>;
   return {
-    columns: { ...LLOYDS_PROFILE.columns, ...(typeof value.columns === "object" ? value.columns : {}) },
+    columns: { ...fallback.columns, ...(value.columns && typeof value.columns === "object" ? value.columns : {}) },
     dateFormat: DATE_FORMATS.includes(value.dateFormat as DateFormat)
       ? (value.dateFormat as DateFormat)
-      : LLOYDS_PROFILE.dateFormat,
+      : fallback.dateFormat,
     numberFormat: NUMBER_FORMATS.includes(value.numberFormat as NumberFormat)
       ? (value.numberFormat as NumberFormat)
-      : LLOYDS_PROFILE.numberFormat,
+      : fallback.numberFormat,
+    amountSign: AMOUNT_SIGNS.includes(value.amountSign as AmountSign)
+      ? (value.amountSign as AmountSign)
+      : // An explicit null is someone un-choosing it: ask, rather than fall back.
+        value.amountSign === null
+        ? null
+        : (fallback.amountSign ?? null),
+    balanceOwed: typeof value.balanceOwed === "boolean" ? value.balanceOwed : (fallback.balanceOwed ?? false),
   };
 }
 
@@ -268,17 +325,33 @@ export function resolveColumns(
   const trimmed = header.map((h) => h.replace(/^﻿/, "").trim().toLowerCase());
   const index: Partial<Record<StatementField, number>> = {};
   const problems: ColumnProblem[] = [];
+  const required = requiredFields(profile);
   for (const field of STATEMENT_FIELDS) {
     const name = profile.columns[field];
     if (!name) continue;
     const at = trimmed.indexOf(name.trim().toLowerCase());
     if (at >= 0) index[field] = at;
-    else if (REQUIRED_FIELDS.includes(field)) {
+    else if (required.includes(field)) {
       problems.push({ field, message: `No "${name}" column for ${FIELD_LABEL[field].toLowerCase()}` });
     }
   }
-  for (const field of REQUIRED_FIELDS) {
+  for (const field of required) {
     if (!profile.columns[field]) problems.push({ field, message: `Choose a column for ${FIELD_LABEL[field].toLowerCase()}` });
+  }
+  if (profile.columns.amount) {
+    // Two ways of saying the amount could disagree; which one wins is not ours to pick.
+    if (profile.columns.debit || profile.columns.credit) {
+      problems.push({
+        field: "amount",
+        message: "Choose either one amount column or separate money out and money in columns, not both",
+      });
+    }
+    if (!profile.amountSign) {
+      problems.push({
+        field: "amount",
+        message: "Say what a positive amount means in this file: money spent or money received",
+      });
+    }
   }
   return { index, problems };
 }
@@ -292,7 +365,7 @@ export function buildLines(
   rows: string[][],
   index: Partial<Record<StatementField, number>>,
   profile: ImportProfile,
-  account: { sortCode: string; accountNumber: string }
+  account: { sortCode: string | null; accountNumber: string | null }
 ): ParsedLine[] {
   if (rows.length > MAX_STATEMENT_LINES) {
     throw new StatementFileError(`The file has more than ${MAX_STATEMENT_LINES.toLocaleString("en-GB")} lines`);
@@ -305,33 +378,42 @@ export function buildLines(
     const date = parseStatementDate(rawDate, profile.dateFormat);
     if (!date) errors.push(`"${clean(rawDate)}" is not a ${profile.dateFormat} date`);
 
-    const debit = parseStatementAmount(cell(row, "debit"), profile.numberFormat);
-    const credit = parseStatementAmount(cell(row, "credit"), profile.numberFormat);
-    if (debit === undefined) errors.push(`"${clean(cell(row, "debit"))}" is not an amount`);
-    if (credit === undefined) errors.push(`"${clean(cell(row, "credit"))}" is not an amount`);
-
     let amount: Pence | null = null;
-    if (debit !== undefined && credit !== undefined) {
-      const out = debit ?? 0;
-      const into = credit ?? 0;
-      if (out !== 0 && into !== 0) errors.push("Has both money in and money out");
-      else if (out === 0 && into === 0) errors.push("Has no amount");
-      else if (out < 0 || into < 0) errors.push("Amounts in the in/out columns should not be negative");
-      else amount = into > 0 ? into : -out;
+    if (index.amount !== undefined) {
+      // One signed column: the profile says which way round the sign is.
+      const signed = parseStatementAmount(cell(row, "amount"), profile.numberFormat);
+      if (signed === undefined) errors.push(`"${clean(cell(row, "amount"))}" is not an amount`);
+      else if (signed === null || signed === 0) errors.push("Has no amount");
+      else amount = profile.amountSign === "OUT_POSITIVE" ? -signed : signed;
+    } else {
+      const debit = parseStatementAmount(cell(row, "debit"), profile.numberFormat);
+      const credit = parseStatementAmount(cell(row, "credit"), profile.numberFormat);
+      if (debit === undefined) errors.push(`"${clean(cell(row, "debit"))}" is not an amount`);
+      if (credit === undefined) errors.push(`"${clean(cell(row, "credit"))}" is not an amount`);
+      if (debit !== undefined && credit !== undefined) {
+        const out = debit ?? 0;
+        const into = credit ?? 0;
+        if (out !== 0 && into !== 0) errors.push("Has both money in and money out");
+        else if (out === 0 && into === 0) errors.push("Has no amount");
+        else if (out < 0 || into < 0) errors.push("Amounts in the in/out columns should not be negative");
+        else amount = into > 0 ? into : -out;
+      }
     }
 
     let balance: Pence | null = null;
     if (index.balance !== undefined) {
       const parsed = parseStatementAmount(cell(row, "balance"), profile.numberFormat);
       if (parsed === undefined) errors.push(`"${clean(cell(row, "balance"))}" is not a balance`);
-      else balance = parsed;
+      // What we owe is held negative, so each balance still follows from the last.
+      // (Nothing owed is plain zero, not minus zero.)
+      else balance = parsed !== null && parsed !== 0 && profile.balanceOwed ? -parsed : parsed;
     }
 
-    if (index.sortCode !== undefined) {
+    if (index.sortCode !== undefined && account.sortCode !== null) {
       const sortCode = normaliseSortCode(cell(row, "sortCode"));
       if (sortCode && sortCode !== account.sortCode) errors.push(`Sort code ${sortCode} is not this account's`);
     }
-    if (index.accountNumber !== undefined) {
+    if (index.accountNumber !== undefined && account.accountNumber !== null) {
       const number = normaliseAccountNumber(cell(row, "accountNumber"));
       if (number && number !== account.accountNumber) errors.push("The account number is not this account's");
     }

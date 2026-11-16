@@ -4,6 +4,7 @@ import { toLedgerDate } from "@/lib/accounting/dates";
 import {
   assertAllocationDate,
   isBankAccountCode,
+  isCardAccountCode,
   receiptPostingLines,
   refundPostingLines,
   supplierPaymentPostingLines,
@@ -50,6 +51,16 @@ describe("isBankAccountCode", () => {
     expect(isBankAccountCode("1100")).toBe(false);
     expect(isBankAccountCode("1300")).toBe(false);
     expect(isBankAccountCode("12000")).toBe(false);
+  });
+});
+
+describe("isCardAccountCode", () => {
+  it("accepts the 20xx range only", () => {
+    expect(isCardAccountCode("2050")).toBe(true);
+    expect(isCardAccountCode("2000")).toBe(true);
+    expect(isCardAccountCode("2100")).toBe(false);
+    expect(isCardAccountCode("1200")).toBe(false);
+    expect(isCardAccountCode("20500")).toBe(false);
   });
 });
 

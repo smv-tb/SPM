@@ -445,29 +445,47 @@ export type SerializedPayment = ReturnType<typeof serializePayment>;
 interface BankAccountRow {
   id: string;
   name: string;
+  kind: "BANK" | "CREDIT_CARD";
   ledgerAccountId: string;
-  sortCode: string;
-  accountNumber: string;
+  sortCode: string | null;
+  accountNumber: string | null;
+  cardLastFour: string | null;
   isArchived: boolean;
   ledgerAccount?: { code: string; name: string } | null;
 }
 
 /**
  * The account number goes out masked to its last four digits; the full
- * number is only needed to check a file, which happens on the server.
+ * number is only needed to check a file, which happens on the server. A
+ * credit card only ever has its last four. `details` is the one line that
+ * identifies either kind on a screen.
  */
 export function serializeBankAccount(
   account: BankAccountRow,
   position?: { statementBalance: Pence | null; statementDate: string | null; booksBalance: Pence; unreconciled: number }
 ) {
+  const sortCode =
+    account.sortCode === null
+      ? null
+      : `${account.sortCode.slice(0, 2)}-${account.sortCode.slice(2, 4)}-${account.sortCode.slice(4)}`;
+  const accountNumberMasked =
+    account.accountNumber === null
+      ? null
+      : maskedNumberOrUnreadable(account.accountNumber, bankAccountNumberContext(account.id));
   return {
     id: account.id,
     name: account.name,
+    kind: account.kind,
     ledgerAccountId: account.ledgerAccountId,
     ledgerAccountCode: account.ledgerAccount?.code ?? null,
     ledgerAccountName: account.ledgerAccount?.name ?? null,
-    sortCode: `${account.sortCode.slice(0, 2)}-${account.sortCode.slice(2, 4)}-${account.sortCode.slice(4)}`,
-    accountNumberMasked: maskedNumberOrUnreadable(account.accountNumber, bankAccountNumberContext(account.id)),
+    sortCode,
+    accountNumberMasked,
+    cardLastFour: account.cardLastFour,
+    details:
+      account.kind === "CREDIT_CARD"
+        ? `Credit card ending ${account.cardLastFour ?? "????"}`
+        : `${sortCode} · ${accountNumberMasked}`,
     isArchived: account.isArchived,
     ...(position ?? {}),
   };

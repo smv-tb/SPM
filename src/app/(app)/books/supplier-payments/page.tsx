@@ -34,7 +34,7 @@ export default async function SupplierPaymentsPage({ searchParams }: { searchPar
           orderBy: { name: "asc" },
         })
       : [],
-    canEdit ? bankAccountOptions() : [],
+    canEdit ? bankAccountOptions({ cards: true }) : [],
   ]);
 
   return (

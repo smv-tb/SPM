@@ -79,7 +79,7 @@ export async function setMember(
 
 export async function removeMember(
   tx: Tx,
-  input: { projectId: string; userId: string; actor: AuditActor; ipAddress: string | null }
+  input: { projectId: string; userId: string; actor: AuditActor; ipAddress: string | null; reason?: string | null }
 ): Promise<boolean> {
   const existing = await tx.projectMember.findUnique({
     where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
@@ -92,6 +92,7 @@ export async function removeMember(
     entityType: "Project",
     entityId: input.projectId,
     before: { userId: input.userId, role: existing.role },
+    reason: input.reason || null,
     ipAddress: input.ipAddress,
   });
   return true;

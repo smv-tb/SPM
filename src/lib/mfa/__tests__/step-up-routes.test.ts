@@ -20,15 +20,42 @@ const GUARDED: Record<string, RegExp> = {
   "users/[id]/route.ts": /changeEndsSessions\([^)]*\)[\s\S]*stepUpGuard\([\s\S]*export const DELETE[\s\S]*stepUpGuard\(/,
   "users/[id]/mfa/reset/route.ts": /stepUpGuard\(/,
   "project/[id]/route.ts": /export const DELETE[\s\S]*stepUpGuard\(/,
-  "project/[id]/members/route.ts": /export const PUT[\s\S]*stepUpGuard\(/,
   "books/contacts/[id]/anonymise/route.ts": /requireBooks\([^)]*stepUp:\s*true/,
 };
+
+/**
+ * Routes where every mutating method is dangerous, checked method by method:
+ * the source of each exported handler, up to the next one, must call the guard.
+ * Granting and revoking project access both count — revoking is the containment
+ * step in an incident, so it must not be the cheaper one with a stolen session.
+ */
+const GUARDED_METHODS: Record<string, readonly string[]> = {
+  "project/[id]/members/route.ts": ["PUT", "DELETE"],
+};
+
+function handlerSource(src: string, method: string): string | null {
+  const marker = /^export (?:const|async function|function) (GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)\b/gm;
+  const found = [...src.matchAll(marker)];
+  const i = found.findIndex((m) => m[1] === method);
+  if (i === -1) return null;
+  return src.slice(found[i].index!, found[i + 1]?.index ?? src.length);
+}
 
 describe("dangerous routes ask for a step-up", () => {
   for (const [file, proof] of Object.entries(GUARDED)) {
     it(file, () => {
       expect(readFileSync(join(API, file), "utf8")).toMatch(proof);
     });
+  }
+
+  for (const [file, methods] of Object.entries(GUARDED_METHODS)) {
+    for (const method of methods) {
+      it(`${file}#${method}`, () => {
+        const body = handlerSource(readFileSync(join(API, file), "utf8"), method);
+        expect(body, `${file} has no ${method} handler`).not.toBeNull();
+        expect(body, `${file}#${method} does not ask for a step-up`).toMatch(/stepUpGuard\(/);
+      });
+    }
   }
 
   it("does not ask for it where it would be noise or a trap", () => {

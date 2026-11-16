@@ -17,8 +17,9 @@ import {
   DATE_FORMATS,
   FIELD_LABEL,
   NUMBER_FORMATS,
-  REQUIRED_FIELDS,
   STATEMENT_FIELDS,
+  requiredFields,
+  type AmountSign,
   type ImportProfile,
   type StatementField,
 } from "@/lib/accounting/statement-import";
@@ -84,6 +85,12 @@ export function StatementImportClient({ account }: { account: SerializedBankAcco
   const setColumn = (field: StatementField, value: string) =>
     profile && setProfile({ ...profile, columns: { ...profile.columns, [field]: value || null } });
 
+  const isCard = account.kind === "CREDIT_CARD";
+  // A card's file has no sort code or account number to check lines against.
+  const fields = STATEMENT_FIELDS.filter((f) => !isCard || (f !== "sortCode" && f !== "accountNumber"));
+  const required = profile ? requiredFields(profile) : [];
+  // Balances are held negative while money is owed on a card; shown as what is owed.
+  const shownBalance = (pence: number) => formatPence(isCard && pence !== 0 ? -pence : pence);
   const breaks = preview?.balances.breaks ?? [];
   const canImport =
     preview !== null &&
@@ -96,7 +103,7 @@ export function StatementImportClient({ account }: { account: SerializedBankAcco
     <>
       <Topbar
         title="Import a statement"
-        subtitle={`${account.name} · ${account.sortCode} · ${account.accountNumberMasked}`}
+        subtitle={`${account.name} · ${account.details}`}
         breadcrumbs={[
           { label: "Books", href: "/books" },
           { label: "Bank", href: "/books/bank" },
@@ -121,8 +128,10 @@ export function StatementImportClient({ account }: { account: SerializedBankAcco
               }}
             />
             <p className="text-xs text-muted-foreground">
-              In Lloyds online banking, export the statement as CSV. Nothing is saved until you press Import;
-              lines already imported are recognised and skipped.
+              {isCard
+                ? "Export the card's transactions from the card provider as CSV."
+                : "In Lloyds online banking, export the statement as CSV."}{" "}
+              Nothing is saved until you press Import; lines already imported are recognised and skipped.
             </p>
           </CardContent>
         </Card>
@@ -138,11 +147,15 @@ export function StatementImportClient({ account }: { account: SerializedBankAcco
               </CardHeader>
               <CardContent className="p-5 pt-0 space-y-4">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  {STATEMENT_FIELDS.map((field) => (
+                  {fields.map((field) => (
                     <div key={field}>
                       <FormLabel htmlFor={`col-${field}`}>
                         {FIELD_LABEL[field]}
-                        {REQUIRED_FIELDS.includes(field) ? "" : " (optional)"}
+                        {required.includes(field)
+                          ? ""
+                          : field === "debit" || field === "credit" || field === "amount"
+                            ? ""
+                            : " (optional)"}
                       </FormLabel>
                       <Select
                         id={`col-${field}`}
@@ -188,9 +201,42 @@ export function StatementImportClient({ account }: { account: SerializedBankAcco
                       ))}
                     </Select>
                   </div>
+                  {profile.columns.amount && (
+                    <div>
+                      <FormLabel htmlFor="amount-sign">A positive amount is</FormLabel>
+                      <Select
+                        id="amount-sign"
+                        value={profile.amountSign ?? ""}
+                        onChange={(e) =>
+                          setProfile({ ...profile, amountSign: (e.target.value || null) as AmountSign | null })
+                        }
+                      >
+                        <option value="">— choose —</option>
+                        <option value="OUT_POSITIVE">{isCard ? "Money spent (a purchase)" : "Money out"}</option>
+                        <option value="IN_POSITIVE">{isCard ? "Money received (a repayment or refund)" : "Money in"}</option>
+                      </Select>
+                    </div>
+                  )}
+                  {profile.columns.balance && (
+                    <div>
+                      <FormLabel htmlFor="balance-owed">The balance is</FormLabel>
+                      <Select
+                        id="balance-owed"
+                        value={profile.balanceOwed ? "owed" : "held"}
+                        onChange={(e) => setProfile({ ...profile, balanceOwed: e.target.value === "owed" })}
+                      >
+                        <option value="held">Money in the account</option>
+                        <option value="owed">The amount owed</option>
+                      </Select>
+                    </div>
+                  )}
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  Amounts come either as one column (with its sign) or as separate money out and money in columns: map one
+                  or the other, and set the rest to &ldquo;not in this file&rdquo;.
+                </p>
                 {preview.columnProblems.map((p) => (
-                  <p key={p.field} className="text-sm text-red-600">
+                  <p key={p.message} className="text-sm text-red-600">
                     {p.message}
                   </p>
                 ))}
@@ -223,16 +269,17 @@ export function StatementImportClient({ account }: { account: SerializedBankAcco
                 </p>
                 {preview.balances.opening !== null && breaks.length === 0 && (
                   <p className="text-emerald-700">
-                    The running balance follows on every line: {formatPence(preview.balances.opening)} to{" "}
-                    {formatPence(preview.balances.closing ?? 0)}.
+                    The running balance follows on every line: {shownBalance(preview.balances.opening)}
+                    {isCard ? " owed" : ""} to {shownBalance(preview.balances.closing ?? 0)}
+                    {isCard ? " owed" : ""}.
                   </p>
                 )}
                 {breaks.length > 0 && (
                   <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-amber-800 space-y-2">
                     <p>
                       The running balance does not follow on {breaks.length} line{breaks.length === 1 ? "" : "s"} (first at row{" "}
-                      {breaks[0].row}: expected {formatPence(breaks[0].expected)}, the file says{" "}
-                      {formatPence(breaks[0].stated)}). A line may be missing from the export.
+                      {breaks[0].row}: expected {shownBalance(breaks[0].expected)}, the file says{" "}
+                      {shownBalance(breaks[0].stated)}). A line may be missing from the export.
                     </p>
                     <label className="flex items-center gap-2">
                       <input type="checkbox" checked={allowBreaks} onChange={(e) => setAllowBreaks(e.target.checked)} />
@@ -242,7 +289,7 @@ export function StatementImportClient({ account }: { account: SerializedBankAcco
                 )}
                 {preview.continuity && !preview.continuity.follows && (
                   <p className="text-amber-700">
-                    This file does not pick up from the statement already held ({formatPence(preview.continuity.previousBalance)}{" "}
+                    This file does not pick up from the statement already held ({shownBalance(preview.continuity.previousBalance)}{" "}
                     on {formatDate(preview.continuity.previousDate)}): there may be a gap between the two exports.
                   </p>
                 )}
@@ -263,7 +310,7 @@ export function StatementImportClient({ account }: { account: SerializedBankAcco
                         <th className="px-3 py-2 text-left font-semibold">Type</th>
                         <th className="px-3 py-2 text-left font-semibold">Description</th>
                         <th className="px-3 py-2 text-right font-semibold">Amount</th>
-                        <th className="px-3 py-2 text-right font-semibold">Balance</th>
+                        <th className="px-3 py-2 text-right font-semibold">{isCard ? "Owed" : "Balance"}</th>
                         <th className="px-5 py-2 text-left font-semibold" />
                       </tr>
                     </thead>
@@ -281,8 +328,10 @@ export function StatementImportClient({ account }: { account: SerializedBankAcco
                               </span>
                             ))}
                           </td>
-                          <td className="px-3 py-2 text-right tabular-nums">{l.amount === null ? "" : formatPence(l.amount)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{l.balance === null ? "" : formatPence(l.balance)}</td>
+                          <td className={`px-3 py-2 text-right tabular-nums ${(l.amount ?? 0) > 0 ? "text-emerald-700" : ""}`}>
+                            {l.amount === null ? "" : formatPence(l.amount)}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums">{l.balance === null ? "" : shownBalance(l.balance)}</td>
                           <td className="px-5 py-2">
                             {l.errors.length > 0 ? (
                               <Badge variant="danger" size="sm">Error</Badge>

@@ -26,6 +26,8 @@ export async function sealLegacyBankNumbers(tx: Tx, actor: AuditActor, dryRun: b
 
   const accounts = await tx.bankAccount.findMany();
   for (const account of accounts) {
+    // A credit card holds no account number to seal.
+    if (account.accountNumber === null || account.sortCode === null) continue;
     if (isSealed(account.accountNumber)) continue;
     const context = bankAccountNumberContext(account.id);
     const sealed = sealNumber(account.accountNumber, context);

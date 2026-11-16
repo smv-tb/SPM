@@ -57,12 +57,16 @@ export function duplicateWhere(sortCode: string, number: string, ring: Keyring =
  * A bank account as the audit log may see it: the number masked and a keyed
  * reference so a change to the *first* digits still shows as a change.
  */
-export function auditableBankAccount<T extends { id: string; sortCode: string; accountNumber: string }>(
+export function auditableBankAccount<T extends { id: string; sortCode: string | null; accountNumber: string | null }>(
   row: T,
   ring?: Keyring
-): Omit<T, "accountNumber" | "accountNumberIdx"> & { accountNumber: string | null; numberRef: string } {
+): Omit<T, "accountNumber" | "accountNumberIdx"> & { accountNumber: string | null; numberRef: string | null } {
   const { accountNumber, ...rest } = row as T & { accountNumberIdx?: unknown };
   delete (rest as { accountNumberIdx?: unknown }).accountNumberIdx;
+  // A credit card has neither; its last four digits are already all we hold.
+  if (accountNumber === null || row.sortCode === null) {
+    return { ...(rest as Omit<T, "accountNumber" | "accountNumberIdx">), accountNumber: null, numberRef: null };
+  }
   const plain = openNumber(accountNumber, bankAccountNumberContext(row.id), ring);
   return {
     ...(rest as Omit<T, "accountNumber" | "accountNumberIdx">),

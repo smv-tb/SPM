@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
 import { bankPosition } from "@/lib/accounting/statements";
 import { serializeBankAccount } from "@/lib/accounting/serialize";
-import { bankAccountOptions } from "@/lib/accounting/bank-accounts";
+import { bankAccountOptions, cardAccountOptions } from "@/lib/accounting/bank-accounts";
 import { BankAccountsClient } from "./bank-accounts-client";
 
 export default async function BankAccountsPage() {
@@ -19,14 +19,17 @@ export default async function BankAccountsPage() {
   });
   const positions = await Promise.all(accounts.map((a) => bankPosition(prisma, a)));
   const canSetUp = hasPermission(session, "books:settings");
-  // 12xx accounts not yet tied to a real bank account.
+  // 12xx accounts not yet tied to a real bank account, and 20xx ones not yet tied to a card.
   const linked = new Set(accounts.map((a) => a.ledgerAccountId));
-  const available = canSetUp ? (await bankAccountOptions()).filter((a) => !linked.has(a.id)) : [];
+  const [banks, cards] = canSetUp ? await Promise.all([bankAccountOptions(), cardAccountOptions()]) : [[], []];
+  const available = banks.filter((a) => !linked.has(a.id));
+  const availableForCards = cards.filter((a) => !linked.has(a.id));
 
   return (
     <BankAccountsClient
       accounts={accounts.map((a, i) => serializeBankAccount(a, positions[i]))}
       ledgerAccounts={available}
+      cardLedgerAccounts={availableForCards}
       canSetUp={canSetUp}
     />
   );

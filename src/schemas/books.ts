@@ -257,7 +257,7 @@ export const supplierPaymentSchema = z.object({
   date: dateOnly,
   /** Pounds, as written; parsed to pence by the route. */
   amount,
-  /** A 12xx bank account; omitted means 1200. */
+  /** A 12xx bank account or a 20xx company credit card; omitted means 1200. */
   bankAccountId: z.string().uuid("Invalid account").nullable().optional(),
   reference: z.string().max(100).nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
@@ -293,18 +293,49 @@ export const refundSchema = z.object({
   notes: z.string().max(2000).nullable().optional(),
 });
 
-export const bankAccountCreateSchema = z.object({
-  name: z.string().min(1, "Give the account a name").max(100),
-  ledgerAccountId: z.string().uuid("Choose the ledger account it books to"),
+const bankDetails = {
   sortCode: z.string().regex(/^\s*\d{2}-?\d{2}-?\d{2}\s*$/, "A sort code is six digits, e.g. 30-99-50"),
   accountNumber: z.string().regex(/^\s*\d{8}\s*$/, "An account number is eight digits"),
-});
+};
+/** Four digits exactly, so a whole card number pasted by mistake is refused, not stored. */
+const cardLastFour = z.string().regex(/^\s*\d{4}\s*$/, "Give the last four digits of the card, and only those");
+const bankAccountBase = {
+  name: z.string().min(1, "Give the account a name").max(100),
+  ledgerAccountId: z.string().uuid("Choose the ledger account it books to"),
+};
+
+/**
+ * A bank account (the default when `kind` is omitted) needs a sort code and
+ * account number; a company credit card needs its last four digits, and takes
+ * neither of the others.
+ */
+export const bankAccountCreateSchema = z
+  .object({
+    ...bankAccountBase,
+    kind: z.enum(["BANK", "CREDIT_CARD"]).default("BANK"),
+    sortCode: bankDetails.sortCode.optional(),
+    accountNumber: bankDetails.accountNumber.optional(),
+    cardLastFour: cardLastFour.optional(),
+  })
+  .superRefine((v, ctx) => {
+    const problem = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
+    if (v.kind === "CREDIT_CARD") {
+      if (v.cardLastFour === undefined) problem("cardLastFour", "Give the last four digits of the card");
+      if (v.sortCode !== undefined) problem("sortCode", "A credit card has no sort code");
+      if (v.accountNumber !== undefined) problem("accountNumber", "A credit card has no account number");
+    } else {
+      if (v.sortCode === undefined) problem("sortCode", "A sort code is six digits, e.g. 30-99-50");
+      if (v.accountNumber === undefined) problem("accountNumber", "An account number is eight digits");
+      if (v.cardLastFour !== undefined) problem("cardLastFour", "Card digits belong to a credit card");
+    }
+  });
 
 export const bankAccountUpdateSchema = z
   .object({
     name: z.string().min(1).max(100).optional(),
-    sortCode: bankAccountCreateSchema.shape.sortCode.optional(),
-    accountNumber: bankAccountCreateSchema.shape.accountNumber.optional(),
+    sortCode: bankDetails.sortCode.optional(),
+    accountNumber: bankDetails.accountNumber.optional(),
+    cardLastFour: cardLastFour.optional(),
     isArchived: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, "Nothing to update");
@@ -312,11 +343,15 @@ export const bankAccountUpdateSchema = z
 /** How to read a statement file; sent with an upload as a JSON form field. */
 export const importProfileSchema = z.object({
   columns: z.record(
-    z.enum(["date", "type", "sortCode", "accountNumber", "description", "debit", "credit", "balance"]),
+    z.enum(["date", "type", "sortCode", "accountNumber", "description", "debit", "credit", "amount", "balance"]),
     z.string().max(100).nullable()
   ),
   dateFormat: z.enum(["DD/MM/YYYY", "YYYY-MM-DD", "MM/DD/YYYY"]),
   numberFormat: z.enum(["UK", "EU"]),
+  /** With one signed amount column: what a positive number means. */
+  amountSign: z.enum(["IN_POSITIVE", "OUT_POSITIVE"]).nullable().optional(),
+  /** The balance column is the amount owed (a credit card). */
+  balanceOwed: z.boolean().optional(),
 });
 
 const ids = (label: string) => z.array(z.string().uuid(label)).min(1).max(50);

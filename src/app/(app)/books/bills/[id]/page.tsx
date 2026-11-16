@@ -25,7 +25,7 @@ export default async function BillPage({ params }: { params: Promise<{ id: strin
   const options = bill.status === "DRAFT" ? await loadBillFormOptions() : { suppliers: [], accounts: [] };
   // And only an open bill can be paid.
   const payable = bill.status === "APPROVED" || bill.status === "PART_PAID";
-  const bankAccounts = payable && hasPermission(session, "books:post") ? await bankAccountOptions() : [];
+  const bankAccounts = payable && hasPermission(session, "books:post") ? await bankAccountOptions({ cards: true }) : [];
 
   return (
     <BillDetailClient

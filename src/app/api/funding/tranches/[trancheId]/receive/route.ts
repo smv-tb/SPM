@@ -7,6 +7,7 @@ import { withErrorHandler } from "@/lib/api-errors";
 import { hasPermission } from "@/lib/permissions";
 import { actorFromSession, recordAudit, requestIp } from "@/lib/audit";
 import { fundingTrancheReceiveSchema } from "@/schemas/funding-tranche";
+import { ALREADY_RECEIVED, receiveTranche } from "@/lib/funding-tranches";
 
 type RouteContext = { params: Promise<{ trancheId: string }> };
 
@@ -31,31 +32,27 @@ export const POST = withErrorHandler(async (req: NextRequest, { params }: RouteC
     );
   }
 
-  const tranche = await prisma.$transaction(async (tx) => {
-    const existing = await tx.fundingTranche.findUnique({ where: { id: trancheId } });
-    if (!existing) return null;
-
-    const updated = await tx.fundingTranche.update({
-      where: { id: trancheId },
-      data: {
-        status: "RECEIVED",
-        receivedDate: validation.data.receivedDate ?? new Date(),
-      },
-    });
-    await recordAudit(tx, {
-      actor: actorFromSession(session),
-      action: "tranche.receive",
-      entityType: "FundingTranche",
-      entityId: trancheId,
-      before: existing,
-      after: updated,
-      ipAddress: requestIp(req),
-    });
-    return updated;
+  const result = await prisma.$transaction(async (tx) => {
+    const outcome = await receiveTranche(tx, trancheId, validation.data.receivedDate ?? new Date());
+    if (outcome.kind === "received") {
+      await recordAudit(tx, {
+        actor: actorFromSession(session),
+        action: "tranche.receive",
+        entityType: "FundingTranche",
+        entityId: trancheId,
+        before: outcome.before,
+        after: outcome.after,
+        ipAddress: requestIp(req),
+      });
+    }
+    return outcome;
   });
 
-  if (!tranche) {
+  if (result.kind === "not_found") {
     return NextResponse.json({ error: "Tranche not found" }, { status: 404 });
   }
-  return NextResponse.json(tranche);
+  if (result.kind === "already_received") {
+    return NextResponse.json(ALREADY_RECEIVED, { status: 409 });
+  }
+  return NextResponse.json(result.after);
 });

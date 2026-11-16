@@ -4,7 +4,7 @@ import { fromPence, toPence, type Pence } from "@/lib/money";
 import { recordAudit, type AuditActor } from "@/lib/audit";
 import { AccountingError } from "./errors";
 import { userId } from "./invoices";
-import { isBankAccountCode } from "./payment";
+import { isBankAccountCode, isCardAccountCode } from "./payment";
 import { markBankDetailsChanged } from "./bank-details-change";
 import {
   auditableBankAccount, bankAccountIndex, bankAccountNumberContext, duplicateWhere, openNumber, sealNumber,
@@ -12,6 +12,8 @@ import {
 import { randomUUID } from "node:crypto";
 import { actorLabel } from "@/lib/security-alerts";
 import {
+  CARD_PROFILE,
+  LLOYDS_PROFILE,
   StatementFileError,
   buildLines,
   checkBalances,
@@ -32,6 +34,13 @@ import {
  * The only code that writes bank accounts, statement imports and statement
  * lines. A statement is the bank's record, not a posting: nothing here
  * touches the ledger. Reconciliation (Phase 6) matches lines to the books.
+ *
+ * A company credit card is a bank account of kind CREDIT_CARD: the same
+ * statements, lines and reconciliation, booked to a 20xx liability account.
+ * Amounts keep one meaning for both kinds — positive is money in, negative
+ * money out — so a card purchase is negative and a repayment positive, and a
+ * card's balance is negative while we owe on it, exactly as its ledger
+ * account reads as debit minus credit.
  */
 
 type Tx = Prisma.TransactionClient;
@@ -39,16 +48,31 @@ type Reader = Pick<Tx, "bankAccount" | "statementLine">;
 
 // ── Bank accounts ───────────────────────────────────────────────────────────
 
+export type BankAccountKind = "BANK" | "CREDIT_CARD";
+
 export interface BankAccountInput {
   name: string;
+  /** Omitted means a bank account. */
+  kind?: BankAccountKind;
   ledgerAccountId: string;
-  sortCode: string;
-  accountNumber: string;
+  /** A bank account's details. */
+  sortCode?: string | null;
+  accountNumber?: string | null;
+  /** A credit card's last four digits; the full number is never taken. */
+  cardLastFour?: string | null;
 }
 
-function normaliseDetails(input: { sortCode: string; accountNumber: string }) {
-  const sortCode = input.sortCode.replace(/[\s-]/g, "");
-  const accountNumber = input.accountNumber.replace(/\s/g, "");
+function normaliseLastFour(value: string | null | undefined): string {
+  const digits = (value ?? "").replace(/\s/g, "");
+  if (!/^\d{4}$/.test(digits)) {
+    throw new AccountingError("INVALID_CARD_DIGITS", "Give the last four digits of the card, and only those", 422);
+  }
+  return digits;
+}
+
+function normaliseDetails(input: { sortCode?: string | null; accountNumber?: string | null }) {
+  const sortCode = (input.sortCode ?? "").replace(/[\s-]/g, "");
+  const accountNumber = (input.accountNumber ?? "").replace(/\s/g, "");
   if (!/^\d{6}$/.test(sortCode)) {
     throw new AccountingError("INVALID_SORT_CODE", "A sort code is six digits, e.g. 30-99-50", 422);
   }
@@ -59,17 +83,49 @@ function normaliseDetails(input: { sortCode: string; accountNumber: string }) {
 }
 
 export async function createBankAccount(tx: Tx, input: BankAccountInput, actor: AuditActor) {
+  const kind: BankAccountKind = input.kind ?? "BANK";
   const ledger = await tx.ledgerAccount.findUnique({ where: { id: input.ledgerAccountId } });
-  if (!ledger || ledger.type !== "ASSET" || !isBankAccountCode(ledger.code) || ledger.isArchived) {
+  if (kind === "CREDIT_CARD") {
+    if (!ledger || ledger.type !== "LIABILITY" || !isCardAccountCode(ledger.code) || ledger.isArchived) {
+      throw new AccountingError("NOT_A_CARD_ACCOUNT", "Choose a live 20xx credit card account in the chart", 422);
+    }
+  } else if (!ledger || ledger.type !== "ASSET" || !isBankAccountCode(ledger.code) || ledger.isArchived) {
     throw new AccountingError("NOT_A_BANK_ACCOUNT", "Choose a live 12xx bank account in the chart", 422);
   }
   if (await tx.bankAccount.findUnique({ where: { ledgerAccountId: ledger.id } })) {
     throw new AccountingError(
       "ALREADY_LINKED",
-      `${ledger.code} ${ledger.name} already has a bank account`,
+      `${ledger.code} ${ledger.name} already has a ${kind === "CREDIT_CARD" ? "credit card" : "bank account"}`,
       409
     );
   }
+
+  if (kind === "CREDIT_CARD") {
+    if (input.sortCode || input.accountNumber) {
+      throw new AccountingError("NOT_FOR_A_CARD", "A credit card has no sort code or account number", 422);
+    }
+    const card = await tx.bankAccount.create({
+      data: {
+        name: input.name.trim(),
+        kind,
+        ledgerAccountId: ledger.id,
+        cardLastFour: normaliseLastFour(input.cardLastFour),
+      },
+    });
+    await recordAudit(tx, {
+      actor,
+      action: "bank_account.create",
+      entityType: "BankAccount",
+      entityId: card.id,
+      after: auditableBankAccount(card),
+    });
+    // Not a change of payee details: nobody pays us on a credit card.
+    return card;
+  }
+  if (input.cardLastFour) {
+    throw new AccountingError("NOT_FOR_A_BANK_ACCOUNT", "Card digits belong to a credit card, not a bank account", 422);
+  }
+
   const details = normaliseDetails(input);
   if (await tx.bankAccount.findFirst({ where: duplicateWhere(details.sortCode, details.accountNumber) })) {
     throw new AccountingError("DUPLICATE_ACCOUNT", "That sort code and account number are already set up", 409);
@@ -102,18 +158,28 @@ export async function createBankAccount(tx: Tx, input: BankAccountInput, actor: 
 export async function updateBankAccount(
   tx: Tx,
   id: string,
-  input: { name?: string; sortCode?: string; accountNumber?: string; isArchived?: boolean },
+  input: { name?: string; sortCode?: string; accountNumber?: string; cardLastFour?: string; isArchived?: boolean },
   actor: AuditActor
 ) {
   const existing = await tx.bankAccount.findUnique({ where: { id } });
   if (!existing) throw new AccountingError("NOT_FOUND", "Bank account not found", 404);
 
   const data: Prisma.BankAccountUpdateInput = {};
-  const currentNumber = openNumber(existing.accountNumber, bankAccountNumberContext(id));
   let detailsChanged = false;
   if (input.name !== undefined) data.name = input.name.trim();
   if (input.isArchived !== undefined) data.isArchived = input.isArchived;
+  if (input.cardLastFour !== undefined) {
+    if (existing.kind !== "CREDIT_CARD") {
+      throw new AccountingError("NOT_FOR_A_BANK_ACCOUNT", "Card digits belong to a credit card, not a bank account", 422);
+    }
+    // A replacement card keeps the account and its history; only the label moves.
+    data.cardLastFour = normaliseLastFour(input.cardLastFour);
+  }
   if (input.sortCode !== undefined || input.accountNumber !== undefined) {
+    if (existing.kind === "CREDIT_CARD" || existing.sortCode === null || existing.accountNumber === null) {
+      throw new AccountingError("NOT_FOR_A_CARD", "A credit card has no sort code or account number", 422);
+    }
+    const currentNumber = openNumber(existing.accountNumber, bankAccountNumberContext(id));
     // Imported lines were checked against these details; changing them
     // afterwards would make that check meaningless.
     if (await tx.statementLine.count({ where: { bankAccountId: id } })) {
@@ -196,7 +262,11 @@ export async function previewStatement(
   if (!account) throw new AccountingError("NOT_FOUND", "Bank account not found", 404);
   if (account.isArchived) throw new AccountingError("ARCHIVED", `${account.name} is archived`, 409);
 
-  const profile = profileFrom(profileOverride ?? account.importProfile);
+  // A card starts from the card layout, never from Lloyds' bank columns.
+  const profile = profileFrom(
+    profileOverride ?? account.importProfile,
+    account.kind === "CREDIT_CARD" ? CARD_PROFILE : LLOYDS_PROFILE
+  );
   let decoded: ReturnType<typeof decodeStatement>;
   let rows: string[][];
   let delimiter: string;
@@ -236,8 +306,12 @@ export async function previewStatement(
   try {
     parsed = chronological(
       buildLines(data, index, profile, {
+        // A card file carries neither, so there is nothing to check a line against.
         sortCode: account.sortCode,
-        accountNumber: openNumber(account.accountNumber, bankAccountNumberContext(account.id)),
+        accountNumber:
+          account.accountNumber === null
+            ? null
+            : openNumber(account.accountNumber, bankAccountNumberContext(account.id)),
       })
     );
   } catch (error) {

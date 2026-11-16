@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { withErrorHandler, apiError } from "@/lib/api-errors";
 import { hasPermission } from "@/lib/permissions";
+import { requireProjectAccess } from "@/lib/project-access";
 import { actorFromSession, requestIp } from "@/lib/audit";
 import { stepUpGuard } from "@/lib/mfa/step-up";
 import { booksError } from "@/lib/books-api";
@@ -14,6 +15,7 @@ import { MEMBER_ROLES } from "@/lib/project-membership";
 type RouteContext = { params: Promise<{ id: string }> };
 
 const putSchema = z.object({ userId: z.string().min(1).max(100), role: z.enum(MEMBER_ROLES) });
+const deleteSchema = z.object({ reason: z.string().trim().max(500).optional() });
 
 /** Who can open this project. Admins reach every project and are not listed. */
 export const GET = withErrorHandler(async (_req: NextRequest, { params }: RouteContext) => {
@@ -22,6 +24,8 @@ export const GET = withErrorHandler(async (_req: NextRequest, { params }: RouteC
   if (!hasPermission(session, "project:members")) return apiError("Forbidden", 403);
 
   const { id } = await params;
+  // The capability is global; this checks it applies to *this* project (404 if not).
+  await requireProjectAccess(session, id, "project:members");
   if (!(await prisma.project.findUnique({ where: { id }, select: { id: true } }))) return apiError("Project not found", 404);
   return NextResponse.json(await listMembers(prisma, id));
 });
@@ -31,13 +35,14 @@ export const PUT = withErrorHandler(async (req: NextRequest, { params }: RouteCo
   const session = await auth();
   if (!session?.user?.id) return apiError("Unauthorized", 401);
   if (!hasPermission(session, "project:members")) return apiError("Forbidden", 403);
+  const { id } = await params;
+  await requireProjectAccess(session, id, "project:members");
   const refusal = await stepUpGuard(session);
   if (refusal) return refusal;
 
   const parsed = putSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid request data", details: parsed.error.flatten() }, { status: 400 });
 
-  const { id } = await params;
   const actor = actorFromSession(session);
   try {
     const outcome = await prisma.$transaction((tx) =>
@@ -49,17 +54,29 @@ export const PUT = withErrorHandler(async (req: NextRequest, { params }: RouteCo
   }
 });
 
+/**
+ * Removes a member. Revoking access is the containment step in an incident, so
+ * it is no cheaper with a stolen session than granting it: same second-factor
+ * check as PUT. An optional `{ reason }` body is kept in the audit row.
+ */
 export const DELETE = withErrorHandler(async (req: NextRequest, { params }: RouteContext) => {
   const session = await auth();
   if (!session?.user?.id) return apiError("Unauthorized", 401);
   if (!hasPermission(session, "project:members")) return apiError("Forbidden", 403);
+  const { id } = await params;
+  await requireProjectAccess(session, id, "project:members");
+  const refusal = await stepUpGuard(session);
+  if (refusal) return refusal;
 
   const userId = req.nextUrl.searchParams.get("userId");
   if (!userId) return apiError("userId is required", 400);
+  const parsed = deleteSchema.safeParse((await req.json().catch(() => null)) ?? {});
+  if (!parsed.success) return NextResponse.json({ error: "Invalid request data", details: parsed.error.flatten() }, { status: 400 });
 
-  const { id } = await params;
   const removed = await prisma.$transaction((tx) =>
-    removeMember(tx, { projectId: id, userId, actor: actorFromSession(session), ipAddress: requestIp(req) })
+    removeMember(tx, {
+      projectId: id, userId, actor: actorFromSession(session), ipAddress: requestIp(req), reason: parsed.data.reason ?? null,
+    })
   );
   return removed ? NextResponse.json({ ok: true }) : apiError("That person is not a member", 404);
 });

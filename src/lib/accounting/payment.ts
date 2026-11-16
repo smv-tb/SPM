@@ -16,6 +16,11 @@ export function isBankAccountCode(code: string): boolean {
   return /^12\d\d$/.test(code);
 }
 
+/** Company credit cards are the 20xx liability codes: 2050 company credit card… */
+export function isCardAccountCode(code: string): boolean {
+  return /^20\d\d$/.test(code);
+}
+
 type PostingLine = { accountId: string; debit: Pence; credit: Pence };
 
 /** Money in: the bank goes up, and the customer owes that much less. */

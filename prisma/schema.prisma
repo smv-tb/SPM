@@ -863,15 +863,29 @@ model BillAttachment {
 /// A real bank account, linked one-to-one to the 12xx ledger account its
 /// money is booked to. Holds the details a statement file is checked against
 /// and the import profile that reads that bank's files.
+/// What a row in `bank_accounts` is. A credit card is held beside the bank
+/// accounts so statements and reconciliation are one mechanism; it books to a
+/// 20xx liability account instead of a 12xx asset.
+enum BankAccountKind {
+  BANK
+  CREDIT_CARD
+}
+
 model BankAccount {
   id               String   @id @default(uuid())
   name             String
+  /// Fixed once set (trigger): statements and matches were made against it.
+  kind             BankAccountKind @default(BANK)
   ledgerAccountId  String   @unique
-  /// Six digits, no dashes: "309950".
-  sortCode         String
+  /// Six digits, no dashes: "309950". Null on a credit card.
+  sortCode         String?
   /// Eight digits, **sealed** (`v1.<keyId>…`, see src/lib/accounting/bank-numbers.ts); a row
   /// not yet converted by scripts/encrypt-bank-numbers.ts still holds the plain digits.
-  accountNumber    String
+  /// Null on a credit card.
+  accountNumber    String?
+  /// A credit card's last four digits, to tell cards apart. The full card
+  /// number is never stored. Null on a bank account.
+  cardLastFour     String?
   /// Keyed blind index of sort code + number (`<keyId>:<hex>`): what "no duplicate account"
   /// is enforced on, since two encryptions of one number never match. Null on legacy rows.
   accountNumberIdx String?  @unique

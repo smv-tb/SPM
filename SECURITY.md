@@ -21,3 +21,5 @@ No release has been tagged yet; only the latest commit on `main` is supported.
 ## Deploying safely
 
 Operational guidance is in [`docs/security/`](docs/security): backups, database roles and resetting two-factor sign-in. Never commit `.env`, keys or real company data.
+
+This application must never be started without `server-wrapper.mjs`; rate limits, audit IPs and new-address alerts all depend on it overwriting `X-Real-IP`. A production server started any other way (`next start`, `node server.js`) refuses to start.

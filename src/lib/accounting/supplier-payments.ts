@@ -120,7 +120,7 @@ export interface SupplierPaymentInput {
  */
 export async function recordSupplierPayment(tx: Tx, input: SupplierPaymentInput, actor: AuditActor) {
   const contact = await loadPayee(tx, input.contactId);
-  const bank = await resolveBankAccount(tx, input.bankAccountId);
+  const bank = await resolveBankAccount(tx, input.bankAccountId, { allowCard: true });
   const id = randomUUID();
 
   const journal = await postNewJournal(
