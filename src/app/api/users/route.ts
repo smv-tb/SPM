@@ -28,12 +28,16 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
   const role = url.searchParams.get("role") as UserRole | null;
   const search = url.searchParams.get("search")?.trim();
 
+  // Email addresses are PM+ (users:emails). Below that they are neither returned
+  // nor searchable, or search would answer "is there an address containing x?".
+  const canSeeEmails = hasPermission(session, "users:emails");
+
   const where: Record<string, unknown> = {};
   if (role) where.role = role;
   if (search) {
     where.OR = [
       { name: { contains: search, mode: "insensitive" } },
-      { email: { contains: search, mode: "insensitive" } },
+      ...(canSeeEmails ? [{ email: { contains: search, mode: "insensitive" } }] : []),
     ];
   }
 
@@ -41,7 +45,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     where,
     select: {
       id: true,
-      email: true,
+      email: canSeeEmails,
       name: true,
       role: true,
       avatarUrl: true,
@@ -59,9 +63,10 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
   const isAdmin = hasPermission(session, "users:manage");
   const hasMore = users.length > limit;
   // Who has a second factor is for administrators; everyone else gets the plain list.
-  const data = (hasMore ? users.slice(0, -1) : users).map(({ totpEnabledAt, ...u }) =>
-    isAdmin ? { ...u, mfaEnabled: totpEnabledAt !== null } : u
-  );
+  const data = (hasMore ? users.slice(0, -1) : users).map(({ totpEnabledAt, ...u }) => {
+    const row = { ...u, email: canSeeEmails ? u.email : null };
+    return isAdmin ? { ...row, mfaEnabled: totpEnabledAt !== null } : row;
+  });
   const nextCursor = hasMore ? data[data.length - 1]?.id : null;
 
   return apiSuccess({ data, nextCursor });
