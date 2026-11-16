@@ -14,6 +14,17 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
   {
+    version: "0.2.0",
+    date: "2026-11-16",
+    highlights: [
+      "Supplier bills: enter the bills you receive, attach the PDF or photo, and approve them into the books.",
+      "Supplier payments: record what you pay against each bill, and see who you still owe on the new Aged creditors report.",
+      "Company credit cards: add a card under Books → Bank, import its statements and reconcile them like a bank account. Only the last four digits are kept.",
+      "Reconciliation learns from what you matched before, so lines that repeat each month are suggested, and matched automatically once the pattern is clear.",
+      "Security improvements behind the scenes.",
+    ],
+  },
+  {
     version: "0.1.0",
     date: "2026-10-21",
     highlights: ["First numbered release. From now on you will be told here when something new arrives."],
