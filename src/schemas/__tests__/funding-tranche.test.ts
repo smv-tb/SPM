@@ -69,6 +69,29 @@ describe("fundingTrancheSchema", () => {
   });
 });
 
+describe("receipt only through the receive action (F-11)", () => {
+  it("refuses a tranche created already RECEIVED", () => {
+    expect(fundingTrancheSchema.safeParse({ ...base, status: "RECEIVED" }).success).toBe(false);
+  });
+
+  it("drops a receivedDate sent on create", () => {
+    const result = fundingTrancheSchema.safeParse({ ...base, receivedDate: "2026-01-01" });
+    expect(result.success).toBe(true);
+    expect(result.success && "receivedDate" in result.data).toBe(false);
+  });
+
+  it("refuses an update to RECEIVED and drops a receivedDate on update", () => {
+    expect(fundingTrancheUpdateSchema.safeParse({ status: "RECEIVED" }).success).toBe(false);
+    const result = fundingTrancheUpdateSchema.safeParse({ receivedDate: "2026-01-01" });
+    expect(result.success && "receivedDate" in result.data).toBe(false);
+  });
+
+  it("still allows PENDING and DELAYED", () => {
+    expect(fundingTrancheSchema.safeParse({ ...base, status: "DELAYED" }).success).toBe(true);
+    expect(fundingTrancheUpdateSchema.safeParse({ status: "PENDING" }).success).toBe(true);
+  });
+});
+
 describe("fundingTrancheUpdateSchema", () => {
   it("allows a partial update with just a status change", () => {
     expect(fundingTrancheUpdateSchema.safeParse({ status: "DELAYED" }).success).toBe(true);

@@ -8,6 +8,7 @@ import { withErrorHandler } from "@/lib/api-errors";
 import { hasPermission } from "@/lib/permissions";
 import { actorFromSession, recordAudit, requestIp } from "@/lib/audit";
 import { fundingTrancheUpdateSchema } from "@/schemas/funding-tranche";
+import { ALREADY_RECEIVED, RECEIVABLE_STATUSES } from "@/lib/funding-tranches";
 
 type RouteContext = { params: Promise<{ trancheId: string }> };
 
@@ -31,18 +32,24 @@ export const PUT = withErrorHandler(async (req: NextRequest, { params }: RouteCo
   }
 
   const data = validation.data;
-  // Moving a tranche back off RECEIVED must drop the receipt date with it —
-  // otherwise the row reads as unsettled while still carrying a settled-on date,
-  // and anything keyed on receivedDate (cash-in reporting) double-counts it.
-  if (data.status !== undefined && data.status !== "RECEIVED" && data.receivedDate === undefined) {
-    data.receivedDate = null;
-  }
 
   const tranche = await prisma.$transaction(async (tx) => {
     const existing = await tx.fundingTranche.findUnique({ where: { id: trancheId } });
     if (!existing) return null;
+    // A received tranche's status is final here: moving it back would let the
+    // receive action run again with a new date (F-11). The condition is in the
+    // UPDATE too, so a receipt racing this edit cannot be undone by it.
+    if (data.status !== undefined && existing.status === "RECEIVED") return "received" as const;
 
-    const updated = await tx.fundingTranche.update({ where: { id: trancheId }, data });
+    const { count } = await tx.fundingTranche.updateMany({
+      where:
+        data.status !== undefined
+          ? { id: trancheId, status: { in: [...RECEIVABLE_STATUSES] } }
+          : { id: trancheId },
+      data,
+    });
+    if (count === 0) return "received" as const;
+    const updated = await tx.fundingTranche.findUniqueOrThrow({ where: { id: trancheId } });
     await recordAudit(tx, {
       actor: actorFromSession(session),
       action: "tranche.update",
@@ -58,6 +65,7 @@ export const PUT = withErrorHandler(async (req: NextRequest, { params }: RouteCo
   if (!tranche) {
     return NextResponse.json({ error: "Tranche not found" }, { status: 404 });
   }
+  if (tranche === "received") return NextResponse.json(ALREADY_RECEIVED, { status: 409 });
   return NextResponse.json(tranche);
 });
 

@@ -2,6 +2,9 @@ import { z } from "zod";
 
 export const FundingTrancheStatusEnum = z.enum(["PENDING", "RECEIVED", "DELAYED"]);
 export const TrancheDirectionEnum = z.enum(["INCOMING", "OUTGOING"]);
+// What create and update may set. RECEIVED (and the receipt date) only comes
+// from the receive action, which refuses a tranche already received (F-11).
+export const TrancheOpenStatusEnum = z.enum(["PENDING", "DELAYED"]);
 
 export const fundingTrancheSchema = z.object({
   // Not `.uuid()` — funding records seeded by the ODS migration have
@@ -12,8 +15,7 @@ export const fundingTrancheSchema = z.object({
   label: z.string().min(1, "Label is required"),
   amount: z.coerce.number().nonnegative("Amount must be 0 or greater"),
   dueDate: z.coerce.date(),
-  receivedDate: z.coerce.date().nullable().optional(),
-  status: FundingTrancheStatusEnum.default("PENDING"),
+  status: TrancheOpenStatusEnum.default("PENDING"),
   direction: TrancheDirectionEnum.default("INCOMING"),
   milestoneId: z.string().uuid("Invalid milestone ID").nullable().optional(),
 });
@@ -22,8 +24,7 @@ export const fundingTrancheUpdateSchema = z.object({
   label: z.string().min(1, "Label is required").optional(),
   amount: z.coerce.number().nonnegative("Amount must be 0 or greater").optional(),
   dueDate: z.coerce.date().optional(),
-  receivedDate: z.coerce.date().nullable().optional(),
-  status: FundingTrancheStatusEnum.optional(),
+  status: TrancheOpenStatusEnum.optional(),
   direction: TrancheDirectionEnum.optional(),
   milestoneId: z.string().uuid("Invalid milestone ID").nullable().optional(),
 });

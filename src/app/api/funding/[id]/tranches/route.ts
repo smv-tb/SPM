@@ -57,7 +57,6 @@ export const POST = withErrorHandler(async (req: NextRequest, { params }: RouteC
         label: data.label,
         amount: data.amount,
         dueDate: data.dueDate,
-        receivedDate: data.receivedDate ?? null,
         status: data.status,
         direction: data.direction,
         milestoneId: data.milestoneId ?? null,
