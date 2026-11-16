@@ -15,7 +15,7 @@ export function registerReconciliationTools(
   handlers: Map<string, (args: Record<string, unknown>) => Promise<unknown>>
 ) {
   handlers.set("reconciliation_view", defineTool(
-    "Everything the reconcile screen needs: unreconciled statement lines, auto-suggestions, and loose book entries (entries in the books not yet matched to the statement). Returns an object with `lines`, `suggestions` and `bookOnly`.",
+    "Everything the reconcile screen needs: unreconciled statement lines, auto-suggestions, and loose book entries (entries in the books not yet matched to the statement). Suggestions are learned from earlier reconciliations: a CREATE candidate means lines described like this one were posted straight to that account before (apply it with reconciliation_create_and_reconcile). Returns an object with `lines`, `suggestions` and `bookOnly`.",
     {
       type: "object",
       properties: {
@@ -143,7 +143,7 @@ export function registerReconciliationTools(
   ));
 
   handlers.set("reconciliation_auto", defineTool(
-    "Apply every safe auto-reconciliation suggestion: HIGH-confidence matches that no other line competes for. Returns { matched, paymentsRecorded, left } (how many lines were matched, how many payments were recorded, and how many unreconciled lines remain for manual review).",
+    "Apply every safe auto-reconciliation suggestion: HIGH-confidence matches that no other line competes for, including lines posted to the account that lines like them always went to before. Returns { matched, paymentsRecorded, journalsPosted, left } (how many lines were matched, how many payments were recorded, how many journals were posted from learned habits, and how many unreconciled lines remain for manual review).",
     {
       type: "object",
       properties: {

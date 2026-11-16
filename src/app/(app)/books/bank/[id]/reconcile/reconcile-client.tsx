@@ -77,7 +77,13 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
   }
 
   async function accept(lineId: string, c: Candidate) {
-    if (c.kind === "BOOK") {
+    if (c.kind === "CREATE") {
+      await send(
+        `${base}/create`,
+        { method: "POST", body: JSON.stringify({ statementLineId: lineId, accountId: c.accountId, memo: null }) },
+        "Posted and matched."
+      );
+    } else if (c.kind === "BOOK") {
       await send(`${base}/match`, {
         method: "POST",
         body: JSON.stringify({ statementLineIds: [lineId], journalLineIds: c.journalLineIds }),
@@ -98,11 +104,14 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
   async function auto() {
     const result = await send(`${base}/auto`, { method: "POST" });
     if (result) {
+      const did = [
+        result.paymentsRecorded && `recording ${result.paymentsRecorded} payment${result.paymentsRecorded === 1 ? "" : "s"}`,
+        result.journalsPosted &&
+          `posting ${result.journalsPosted} line${result.journalsPosted === 1 ? "" : "s"} the way ${result.journalsPosted === 1 ? "it was" : "they were"} posted before`,
+      ].filter(Boolean);
       setMessage({
         tone: "ok",
-        text: `Matched ${result.matched} line${result.matched === 1 ? "" : "s"}${
-          result.paymentsRecorded ? `, recording ${result.paymentsRecorded} payment${result.paymentsRecorded === 1 ? "" : "s"}` : ""
-        }. ${result.left} left to look at.`,
+        text: `Matched ${result.matched} line${result.matched === 1 ? "" : "s"}${did.length ? `, ${did.join(" and ")}` : ""}. ${result.left} left to look at.`,
       });
     }
   }
@@ -131,7 +140,7 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
         <p className="text-sm text-muted-foreground">
           {view.lines.length === 0
             ? "Every statement line is reconciled."
-            : `${view.lines.length} statement line${view.lines.length === 1 ? "" : "s"} to reconcile; ${autoCount} can be matched automatically. Only matches marked Sure are applied automatically — everything else waits for you.`}
+            : `${view.lines.length} statement line${view.lines.length === 1 ? "" : "s"} to reconcile; ${autoCount} can be matched automatically. Only matches marked Sure are applied automatically — everything else waits for you. Lines you post or match by hand are remembered: once the same kind of line has gone the same way twice, the next one is Sure.`}
         </p>
 
         {message && (
@@ -196,7 +205,9 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
                           </div>
                           <p className="text-xs text-muted-foreground">
                             {pick.reasons.join(" · ")}
-                            {pick.kind !== "BOOK" && " · matching records the payment"}
+                            {pick.kind === "CREATE"
+                              ? " · matching posts it to the books"
+                              : pick.kind !== "BOOK" && " · matching records the payment"}
                           </p>
                         </div>
                         <div className="flex items-center gap-2">

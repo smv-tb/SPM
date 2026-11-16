@@ -11,8 +11,10 @@ import {
   suggestMatches,
   type BookLineIn,
   type Candidate,
+  type Learning,
   type OpenBillIn,
   type OpenInvoiceIn,
+  type PastMatch,
   type StatementLineIn,
   type Suggestion,
 } from "./reconcile-match";
@@ -31,7 +33,15 @@ import { recordSupplierPayment, settledByBill } from "./supplier-payments";
 type Tx = Prisma.TransactionClient;
 type Reader = Pick<
   Tx,
-  "bankAccount" | "statementLine" | "journalLine" | "invoice" | "creditAllocation" | "paymentAllocation" | "bill" | "billPaymentAllocation"
+  | "bankAccount"
+  | "statementLine"
+  | "journalLine"
+  | "ledgerAccount"
+  | "invoice"
+  | "creditAllocation"
+  | "paymentAllocation"
+  | "bill"
+  | "billPaymentAllocation"
 >;
 
 async function loadAccount(db: Pick<Tx, "bankAccount">, bankAccountId: string) {
@@ -60,6 +70,83 @@ export async function unreconciledBookLines(db: Pick<Tx, "journalLine">, ledgerA
   });
 }
 
+/** How far back the engine looks for lines like the ones in front of it. */
+const LEARN_FROM_LINES = 2000;
+
+/**
+ * What earlier reconciliations teach, read from the reconciliations
+ * themselves (on any bank account): a line matched one-to-one with a
+ * customer's receipt or a supplier's payment was that contact; one matched to
+ * a plain two-line journal was posted to the journal's other account. Nothing
+ * is stored, so an unmatched line stops counting the moment it is unmatched.
+ */
+export async function loadLearning(
+  db: Pick<Tx, "statementLine" | "ledgerAccount">,
+  ledgerAccountId: string
+): Promise<Learning> {
+  const [history, accounts] = await Promise.all([
+    db.statementLine.findMany({
+      where: { reconciliationId: { not: null } },
+      orderBy: [{ reconciledAt: "desc" }, { sequence: "desc" }],
+      take: LEARN_FROM_LINES,
+      select: {
+        description: true,
+        amount: true,
+        reconciliation: {
+          select: {
+            _count: { select: { statementLines: true } },
+            journalLines: {
+              select: {
+                journalLine: {
+                  select: {
+                    accountId: true,
+                    entry: {
+                      select: {
+                        lines: { select: { accountId: true } },
+                        customerPayment: { select: { contactId: true, kind: true } },
+                        supplierPayment: { select: { contactId: true } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+    // Where createAndReconcile will post: live, not this bank, not the
+    // control accounts that go through invoices and bills.
+    db.ledgerAccount.findMany({
+      where: {
+        isArchived: false,
+        id: { not: ledgerAccountId },
+        code: { notIn: [SYSTEM_ACCOUNT_CODES.TRADE_DEBTORS, SYSTEM_ACCOUNT_CODES.TRADE_CREDITORS] },
+      },
+      select: { id: true, code: true, name: true },
+    }),
+  ]);
+
+  const past: PastMatch[] = [];
+  for (const line of history) {
+    const rec = line.reconciliation;
+    // Several lines against several entries say nothing about any one of them.
+    if (!rec || rec._count.statementLines !== 1 || rec.journalLines.length !== 1) continue;
+    const { accountId, entry } = rec.journalLines[0].journalLine;
+    const amount = toPence(line.amount);
+    const base = { description: line.description, amount };
+    if (entry.customerPayment) {
+      if (entry.customerPayment.kind === "RECEIPT") past.push({ ...base, kind: "CONTACT", contactId: entry.customerPayment.contactId });
+    } else if (entry.supplierPayment) {
+      past.push({ ...base, kind: "CONTACT", contactId: entry.supplierPayment.contactId });
+    } else if (entry.lines.length === 2) {
+      const other = entry.lines.find((l) => l.accountId !== accountId);
+      if (other) past.push({ ...base, kind: "ACCOUNT", accountId: other.accountId });
+    }
+  }
+  return { past, accounts: accounts.map((a) => ({ id: a.id, label: `${a.code} ${a.name}` })) };
+}
+
 export interface ReconcileView {
   lines: (StatementLineIn & { type: string | null; balance: Pence | null })[];
   suggestions: Suggestion[];
@@ -74,7 +161,7 @@ export interface ReconcileView {
 /** Everything the reconcile screen needs: lines, suggestions and loose book entries. */
 export async function reconcileView(db: Reader, bankAccountId: string): Promise<ReconcileView> {
   const account = await loadAccount(db, bankAccountId);
-  const [statement, book, invoices, bills] = await Promise.all([
+  const [statement, book, invoices, bills, learning] = await Promise.all([
     db.statementLine.findMany({
       where: { bankAccountId, reconciledAt: null },
       orderBy: [{ date: "asc" }, { sequence: "asc" }],
@@ -88,6 +175,7 @@ export async function reconcileView(db: Reader, bankAccountId: string): Promise<
       where: { status: { in: ["APPROVED", "PART_PAID"] } },
       include: { contact: { select: { name: true } } },
     }),
+    loadLearning(db, account.ledgerAccountId),
   ]);
   const settled = (await settledByInvoice(db, invoices.map((i) => i.id))).settled;
   const paidBills = await settledByBill(db, bills.map((b) => b.id));
@@ -131,7 +219,7 @@ export async function reconcileView(db: Reader, bankAccountId: string): Promise<
 
   return {
     lines,
-    suggestions: suggestMatches(lines, books, open, owed),
+    suggestions: suggestMatches(lines, books, open, owed, learning),
     openInvoices: open
       .map((i) => ({ ...i }))
       .sort((a, b) => a.issueDate.localeCompare(b.issueDate) || a.number.localeCompare(b.number)),
@@ -420,7 +508,13 @@ export async function reconcileWithSupplierPayment(
  */
 export async function createAndReconcile(
   tx: Tx,
-  input: { bankAccountId: string; statementLineId: string; accountId: string; memo?: string | null },
+  input: {
+    bankAccountId: string;
+    statementLineId: string;
+    accountId: string;
+    memo?: string | null;
+    method?: "MANUAL" | "AUTO";
+  },
   actor: AuditActor
 ) {
   await lockAccount(tx, input.bankAccountId);
@@ -507,7 +601,7 @@ export async function createAndReconcile(
   });
   const reconciliation = await reconcile(
     tx,
-    { bankAccountId: account.id, statementLineIds: [line.id], journalLineIds: [bankLine.id] },
+    { bankAccountId: account.id, statementLineIds: [line.id], journalLineIds: [bankLine.id], method: input.method },
     actor
   );
   return { reconciliation, journalEntryId: journal.id };
@@ -542,16 +636,35 @@ export async function unreconcile(tx: Tx, reconciliationId: string, actor: Audit
 /**
  * Applies every suggestion that is safe without a person: HIGH confidence,
  * the line's only HIGH candidate, and nothing else claiming the same entry or
- * invoice. Everything else is left for the reconcile screen.
+ * invoice. That includes a learned posting: a line described like ones always
+ * posted to the same account before, with nothing in the books or among the
+ * open invoices and bills that it could be instead. Everything else is left
+ * for the reconcile screen.
  */
 export async function autoReconcile(tx: Tx, bankAccountId: string, actor: AuditActor) {
   const view = await reconcileView(tx, bankAccountId);
   let matched = 0;
   let paymentsRecorded = 0;
+  let journalsPosted = 0;
   for (const suggestion of view.suggestions) {
     const pick: Candidate | null = suggestion.auto;
     if (!pick) continue;
-    if (pick.kind === "BOOK") {
+    if (pick.kind === "CREATE") {
+      try {
+        await createAndReconcile(
+          tx,
+          { bankAccountId, statementLineId: suggestion.statementLineId, accountId: pick.accountId, method: "AUTO" },
+          actor
+        );
+      } catch (error) {
+        // A journal posted for this line earlier is still in the books
+        // (matched elsewhere, or dated outside the window): that needs a
+        // person. Refused before anything was written, so the rest goes on.
+        if (error instanceof AccountingError && error.code === "ALREADY_POSTED") continue;
+        throw error;
+      }
+      journalsPosted++;
+    } else if (pick.kind === "BOOK") {
       await reconcile(
         tx,
         { bankAccountId, statementLineIds: [suggestion.statementLineId], journalLineIds: pick.journalLineIds, method: "AUTO" },
@@ -574,5 +687,5 @@ export async function autoReconcile(tx: Tx, bankAccountId: string, actor: AuditA
     }
     matched++;
   }
-  return { matched, paymentsRecorded, left: view.lines.length - matched };
+  return { matched, paymentsRecorded, journalsPosted, left: view.lines.length - matched };
 }

@@ -1,12 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
+  descriptionKey,
   namesCustomer,
   quotesInvoice,
   quotesReference,
   significantWords,
   suggestMatches,
   type BookLineIn,
+  type Learning,
   type OpenBillIn,
+  type PastMatch,
   type OpenInvoiceIn,
   type StatementLineIn,
 } from "@/lib/accounting/reconcile-match";
@@ -219,5 +222,152 @@ describe("suggestMatches — open bills", () => {
       [bill("b1", "INV-4471", 14999)]
     );
     expect(suggestions.every((s) => s.auto === null)).toBe(true);
+  });
+});
+
+describe("learning from earlier reconciliations", () => {
+  const CHARGES = "acc-charges";
+  const SOFTWARE = "acc-software";
+  const accounts = [
+    { id: CHARGES, label: "7900 Bank charges" },
+    { id: SOFTWARE, label: "7500 Software" },
+  ];
+  const posted = (description: string, amount: number, accountId: string): PastMatch => ({
+    description,
+    amount,
+    kind: "ACCOUNT",
+    accountId,
+  });
+  const paidBy = (description: string, amount: number, contactId: string): PastMatch => ({
+    description,
+    amount,
+    kind: "CONTACT",
+    contactId,
+  });
+  const learn = (...past: PastMatch[]): Learning => ({ past, accounts });
+  const one = (l: StatementLineIn, learning: Learning, books: BookLineIn[] = [], invoices: OpenInvoiceIn[] = [], bills: OpenBillIn[] = []) =>
+    suggestMatches([l], books, invoices, bills, learning)[0];
+
+  it("reads past the parts of a description that change every time", () => {
+    expect(descriptionKey("DD GOOGLE WORKSPACE 39281 12NOV26")).toBe(descriptionKey("dd Google Workspace 40117 12DEC26"));
+    expect(descriptionKey("GOOGLE WORKSPACE")).not.toBe(descriptionKey("GOOGLE CLOUD"));
+    expect(descriptionKey("REF 123456 09NOV")).toBe("");
+  });
+
+  it("applies a posting made the same way twice", () => {
+    const s = one(
+      line("s1", "2026-12-01", -650, "ACCOUNT FEE 01DEC"),
+      learn(posted("ACCOUNT FEE 01NOV", -650, CHARGES), posted("ACCOUNT FEE 01OCT", -600, CHARGES))
+    );
+    expect(s.auto).toMatchObject({ kind: "CREATE", accountId: CHARGES, uses: 2, confidence: "HIGH" });
+    expect(s.auto?.label).toBe("Post to 7900 Bank charges");
+  });
+
+  it("only suggests after a single earlier posting", () => {
+    const s = one(line("s1", "2026-12-01", -650, "ACCOUNT FEE"), learn(posted("ACCOUNT FEE", -650, CHARGES)));
+    expect(s.auto).toBeNull();
+    expect(s.candidates[0]).toMatchObject({ kind: "CREATE", confidence: "MEDIUM" });
+  });
+
+  it("leaves a habit that changed to a person, newest choice first", () => {
+    const s = one(
+      line("s1", "2026-12-01", -1200, "ADOBE SYSTEMS"),
+      learn(posted("ADOBE SYSTEMS", -1200, SOFTWARE), posted("ADOBE SYSTEMS", -1200, CHARGES), posted("ADOBE SYSTEMS", -1200, CHARGES))
+    );
+    expect(s.auto).toBeNull();
+    expect(s.candidates.map((c) => c.kind === "CREATE" && [c.accountId, c.confidence])).toEqual([
+      [SOFTWARE, "MEDIUM"],
+      [CHARGES, "LOW"],
+    ]);
+  });
+
+  it("forgets what is older than the recent lines", () => {
+    const s = one(
+      line("s1", "2026-12-01", -1200, "ADOBE SYSTEMS"),
+      learn(...Array.from({ length: 5 }, () => posted("ADOBE SYSTEMS", -1200, SOFTWARE)), posted("ADOBE SYSTEMS", -1200, CHARGES))
+    );
+    expect(s.auto).toMatchObject({ kind: "CREATE", accountId: SOFTWARE, uses: 5 });
+  });
+
+  it("keeps money in and money out apart", () => {
+    const s = one(
+      line("s1", "2026-12-01", 650, "ACCOUNT FEE"),
+      learn(posted("ACCOUNT FEE", -650, CHARGES), posted("ACCOUNT FEE", -650, CHARGES))
+    );
+    expect(s.candidates).toEqual([]);
+  });
+
+  it("never posts when an entry in the books could be the same money", () => {
+    const s = one(
+      line("s1", "2026-12-01", -650, "ACCOUNT FEE"),
+      learn(posted("ACCOUNT FEE", -650, CHARGES), posted("ACCOUNT FEE", -650, CHARGES)),
+      [book("j1", "2026-12-01", -650, "Account fee")]
+    );
+    expect(s.auto?.kind).toBe("BOOK");
+    expect(s.candidates.find((c) => c.kind === "CREATE")?.confidence).toBe("MEDIUM");
+  });
+
+  it("never posts when an open bill could be the same money", () => {
+    const s = one(
+      line("s1", "2026-12-01", -650, "ACCOUNT FEE"),
+      learn(posted("ACCOUNT FEE", -650, CHARGES), posted("ACCOUNT FEE", -650, CHARGES)),
+      [],
+      [],
+      [bill("b1", "PM-2041", 650)]
+    );
+    expect(s.auto).toBeNull();
+  });
+
+  it("does not offer an account that can no longer be posted to", () => {
+    const s = one(
+      line("s1", "2026-12-01", -650, "ACCOUNT FEE"),
+      learn(posted("ACCOUNT FEE", -650, "archived"), posted("ACCOUNT FEE", -650, "archived"))
+    );
+    expect(s.candidates).toEqual([]);
+  });
+
+  it("posts each of two identical new lines", () => {
+    const learning = learn(posted("CARD FEE", -30, CHARGES), posted("CARD FEE", -30, CHARGES));
+    const all = suggestMatches(
+      [line("s1", "2026-12-01", -30, "CARD FEE"), line("s2", "2026-12-01", -30, "CARD FEE")],
+      [],
+      [],
+      [],
+      learning
+    );
+    expect(all.map((s) => s.auto?.kind)).toEqual(["CREATE", "CREATE"]);
+  });
+
+  it("recognises a payer who quotes nothing once they have been matched twice", () => {
+    const inv = invoice("i1", "INV007", 50000);
+    const twice = learn(paidBy("A FRANK TRADING 0042", 30000, inv.contactId), paidBy("A FRANK TRADING 0017", 12000, inv.contactId));
+    const s = one(line("s1", "2026-12-01", 50000, "A FRANK TRADING 0099"), twice, [], [inv]);
+    expect(s.auto).toMatchObject({ kind: "INVOICE", invoiceIds: ["i1"], confidence: "HIGH" });
+
+    const once = one(line("s1", "2026-12-01", 50000, "A FRANK TRADING 0099"), learn(twice.past[0]), [], [inv]);
+    expect(once.auto).toBeNull();
+    expect(once.candidates[0].confidence).toBe("MEDIUM");
+  });
+
+  it("still asks when a recognised payer has two invoices of that amount", () => {
+    const a = invoice("i1", "INV007", 50000);
+    const b = invoice("i2", "INV008", 50000);
+    const learning = learn(paidBy("A FRANK TRADING", 30000, a.contactId), paidBy("A FRANK TRADING", 12000, a.contactId));
+    expect(one(line("s1", "2026-12-01", 50000, "A FRANK TRADING"), learning, [], [a, b]).auto).toBeNull();
+  });
+
+  it("recognises a supplier the same way", () => {
+    const b = bill("b1", null, 8400);
+    const learning = learn(paidBy("PMILL DD 5521", -9100, b.contactId), paidBy("PMILL DD 5388", -7700, b.contactId));
+    const s = one(line("s1", "2026-12-01", -8400, "PMILL DD 5604"), learning, [], [], [b]);
+    expect(s.auto).toMatchObject({ kind: "BILL", billIds: ["b1"] });
+  });
+
+  it("does not trust a description that has meant two different payers", () => {
+    const inv = invoice("i1", "INV007", 50000);
+    const learning = learn(paidBy("FASTER PAYMENT STRIPE", 30000, inv.contactId), paidBy("FASTER PAYMENT STRIPE", 12000, "someone-else"));
+    const s = one(line("s1", "2026-12-01", 50000, "FASTER PAYMENT STRIPE"), learning, [], [inv]);
+    expect(s.auto).toBeNull();
+    expect(s.candidates[0].confidence).toBe("LOW");
   });
 });
