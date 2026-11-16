@@ -95,6 +95,8 @@
   "resolutions": {
     "mysql2": "^3.23.2",
     "@hono/node-server@npm:1.19.11": "^1.19.15",
+    "hono@npm:^4.11.4": "4.13.16",
+    "@hono/node-server@npm:^1.19.9 || ^2.0.5": "2.1.6",
     "valibot@npm:1.2.0": "^1.4.2",
     "deepmerge-ts@npm:7.1.5": "^8.0.0",
     "postcss@npm:8.5.15": "^8.5.31",
