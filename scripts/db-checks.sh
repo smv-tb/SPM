@@ -43,6 +43,7 @@ svc credit-note-service.ts
 svc payment-service.ts
 svc statement-service.ts
 svc reconciliation-service.ts
+svc hermes-journals.ts
 svc bill-service.ts
 svc supplier-payment-service.ts
 svc balance-sheet.ts

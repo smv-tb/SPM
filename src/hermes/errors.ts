@@ -1,6 +1,7 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { Prisma } from "@prisma/client";
 import { ZodError } from "zod";
+import { AccountingError } from "@/lib/accounting/errors";
 import { isProjectArchivedError, PROJECT_ARCHIVED_MESSAGE } from "@/lib/project-scope";
 
 export function prismaErrorToMcp(error: unknown): McpError {
@@ -48,6 +49,11 @@ export async function tryCatchTool<T>(fn: () => Promise<T>): Promise<T> {
   } catch (error) {
     if (error instanceof ZodError) throw zodErrorToMcp(error);
     if (error instanceof McpError) throw error;
+    // A rule of the books said no: that is the caller's to fix, and the
+    // message says how — not an internal error.
+    if (error instanceof AccountingError) {
+      throw new McpError(ErrorCode.InvalidParams, `${error.message} (${error.code})`, { code: error.code, problems: error.problems });
+    }
     throw prismaErrorToMcp(error);
   }
 }

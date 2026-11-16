@@ -13,6 +13,7 @@ import { registerCostCategoryTools } from "./cost-categories";
 import { registerCustomFieldTools } from "./custom-fields";
 import { registerAssignmentTools } from "./assignments";
 import { registerReconciliationTools } from "./reconciliation";
+import { registerJournalTools } from "./journals";
 
 export function registerAllTools(
   handlers: Map<string, (args: Record<string, unknown>) => Promise<unknown>>
@@ -32,4 +33,5 @@ export function registerAllTools(
   registerCustomFieldTools(handlers);
   registerAssignmentTools(handlers);
   registerReconciliationTools(handlers);
+  registerJournalTools(handlers);
 }
