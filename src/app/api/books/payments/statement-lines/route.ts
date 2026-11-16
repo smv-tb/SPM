@@ -15,7 +15,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
   if (!guard.ok) return guard.response;
 
   const lines = await prisma.statementLine.findMany({
-    where: { reconciledAt: null, amount: { gt: 0 }, bankAccount: { isArchived: false } },
+    where: { reconciledAt: null, amount: { gt: 0 }, bankAccount: { isArchived: false, kind: "BANK" } },
     orderBy: [{ date: "desc" }, { sequence: "desc" }],
     take: 200,
     select: {

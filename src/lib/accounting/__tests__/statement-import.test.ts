@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  CARD_PROFILE,
   LLOYDS_PROFILE,
   StatementFileError,
   buildLines,
@@ -12,7 +13,9 @@ import {
   parseStatementAmount,
   parseStatementDate,
   profileFrom,
+  requiredFields,
   resolveColumns,
+  type ImportProfile,
 } from "@/lib/accounting/statement-import";
 
 const ACCOUNT = { sortCode: "309950", accountNumber: "12345678" };
@@ -209,6 +212,130 @@ describe("fingerprintKeys", () => {
   it("gives the same line the same key in an overlapping export", () => {
     const line = { date: "2026-10-01", amount: -350, description: "COSTA", balance: 1000 };
     expect(fingerprintKeys("acct", [line])).toEqual(fingerprintKeys("acct", [{ ...line, description: " costa " }]));
+  });
+});
+
+describe("a credit card statement", () => {
+  // One signed amount column, purchases positive, the balance what is owed.
+  const CARD = [
+    "Date,Description,Amount,Balance",
+    "03/10/2026,GITHUB INC,40.00,40.00",
+    "05/10/2026,\"PAPER MILL, INV-77\",120.00,160.00",
+    "12/10/2026,TRAINLINE REFUND,-15.50,144.50",
+    "20/10/2026,PAYMENT RECEIVED - THANK YOU,-144.50,0.00",
+  ].join("\n");
+  const NO_DETAILS = { sortCode: null, accountNumber: null };
+  const spendPositive: ImportProfile = {
+    ...CARD_PROFILE,
+    columns: { ...CARD_PROFILE.columns, balance: "Balance" },
+    amountSign: "OUT_POSITIVE",
+    balanceOwed: true,
+  };
+
+  function parseCard(profile: ImportProfile, text = CARD) {
+    const [header, ...rows] = parseCsv(text, detectDelimiter(text));
+    const { index, problems } = resolveColumns(header, profile);
+    return { problems, lines: buildLines(rows, index, profile, NO_DETAILS) };
+  }
+
+  /** The company card's own export: no balance, newest first, two identical purchases on one day. */
+  const ACTIVITY = [
+    "Date,Description,Amount",
+    "24/10/2026,CARDMEMBERSHIP FEE,195.00",
+    "19/10/2026,PAYPAL *STATIONER       01610000000,25.73",
+    "14/10/2026,PAYMENT RECEIVED - THANK YOU,-269.40",
+    "06/10/2026,PAYPAL *CODEHOST INC    4150000000,44.91",
+    "06/10/2026,PAYPAL *CODEHOST INC    4150000000,44.91",
+    "25/09/2026,PAYPAL *COURIER UK      03450000000,86.52",
+  ].join("\r\n");
+
+  it("reads the company card's export with no set-up", () => {
+    const { problems, lines } = parseCard(CARD_PROFILE, ACTIVITY);
+    expect(problems).toEqual([]);
+    expect(lines.every((l) => l.errors.length === 0 && l.balance === null)).toBe(true);
+    const ordered = chronological(lines);
+    expect(ordered.map((l) => l.date)).toEqual([
+      "2026-09-25", "2026-10-06", "2026-10-06", "2026-10-14", "2026-10-19", "2026-10-24",
+    ]);
+    // Purchases and the fee are money out; the repayment is money in.
+    expect(ordered.map((l) => l.amount)).toEqual([-8652, -4491, -4491, 26940, -2573, -19500]);
+    // With no balance to tell them apart, the two identical purchases are the first and second of their kind.
+    const keys = fingerprintKeys("card", ordered);
+    expect(new Set(keys).size).toBe(6);
+    expect(keys[1].endsWith("|occ:1") && keys[2].endsWith("|occ:2")).toBe(true);
+  });
+
+  it("will not guess which way round the sign is when nobody has said", () => {
+    const { problems } = parseCard({ ...CARD_PROFILE, amountSign: null });
+    expect(problems).toHaveLength(1);
+    expect(problems[0].field).toBe("amount");
+    expect(problems[0].message).toMatch(/positive amount/);
+  });
+
+  it("reads purchases as money out and repayments as money in", () => {
+    const { problems, lines } = parseCard(spendPositive);
+    expect(problems).toEqual([]);
+    expect(lines.map((l) => l.amount)).toEqual([-4000, -12000, 1550, 14450]);
+    expect(lines.every((l) => l.errors.length === 0)).toBe(true);
+  });
+
+  it("holds what is owed as a negative balance, so each one follows from the last", () => {
+    const { lines } = parseCard(spendPositive);
+    expect(lines.map((l) => l.balance)).toEqual([-4000, -16000, -14450, 0]);
+    expect(checkBalances(lines)).toEqual({ breaks: [], opening: 0, closing: 0 });
+  });
+
+  it("reads the same file the other way round when money in is positive", () => {
+    const { lines } = parseCard({ ...spendPositive, amountSign: "IN_POSITIVE", balanceOwed: false });
+    expect(lines.map((l) => l.amount)).toEqual([4000, 12000, -1550, -14450]);
+    expect(lines[0].balance).toBe(4000);
+  });
+
+  it("refuses a blank, zero or malformed amount", () => {
+    const text = ["Date,Description,Amount", "03/10/2026,A,", "03/10/2026,B,0.00", "03/10/2026,C,12.999"].join("\n");
+    const { lines } = parseCard({ ...CARD_PROFILE, amountSign: "OUT_POSITIVE" }, text);
+    expect(lines.map((l) => l.errors)).toEqual([["Has no amount"], ["Has no amount"], ['"12.999" is not an amount']]);
+    expect(lines.every((l) => l.amount === null)).toBe(true);
+  });
+
+  it("refuses one amount column and in/out columns together", () => {
+    const header = ["Date", "Description", "Amount", "Debit Amount", "Credit Amount"];
+    const both: ImportProfile = {
+      ...CARD_PROFILE,
+      columns: { ...CARD_PROFILE.columns, debit: "Debit Amount", credit: "Credit Amount" },
+      amountSign: "OUT_POSITIVE",
+    };
+    expect(resolveColumns(header, both).problems.map((p) => p.message)).toEqual([
+      "Choose either one amount column or separate money out and money in columns, not both",
+    ]);
+  });
+
+  it("needs the amount column instead of money in and money out", () => {
+    expect(requiredFields(CARD_PROFILE)).toEqual(["date", "description", "amount"]);
+    expect(requiredFields(LLOYDS_PROFILE)).toEqual(["date", "description", "debit", "credit"]);
+    expect(resolveColumns(["Date", "Description", "Value"], spendPositive).problems.map((p) => p.message)).toEqual([
+      'No "Amount" column for amount (one column)',
+    ]);
+  });
+
+  it("has no account details to check a line against", () => {
+    // A bank profile on a card: the sort code column is simply not compared.
+    const [header, ...rows] = parseCsv(LLOYDS, ",");
+    const { index } = resolveColumns(header, LLOYDS_PROFILE);
+    expect(buildLines(rows, index, LLOYDS_PROFILE, NO_DETAILS).every((l) => l.errors.length === 0)).toBe(true);
+  });
+
+  it("starts a card from the card layout, and keeps what was saved for it", () => {
+    expect(profileFrom(null, CARD_PROFILE)).toEqual(CARD_PROFILE);
+    const saved = profileFrom({ columns: { amount: "Value" }, amountSign: "OUT_POSITIVE", balanceOwed: true }, CARD_PROFILE);
+    expect(saved.columns.amount).toBe("Value");
+    expect(saved.columns.debit).toBeNull();
+    expect(saved.amountSign).toBe("OUT_POSITIVE");
+    expect(saved.balanceOwed).toBe(true);
+    expect(profileFrom({ amountSign: "sideways" }, CARD_PROFILE).amountSign).toBe("OUT_POSITIVE");
+    expect(profileFrom({ amountSign: null }, CARD_PROFILE).amountSign).toBeNull();
+    // A bank account mapped to one amount column has no default to fall back on.
+    expect(profileFrom({ columns: { amount: "Value" } }).amountSign).toBeNull();
   });
 });
 

@@ -120,7 +120,7 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
     <>
       <Topbar
         title="Reconcile"
-        subtitle={`${account.name} · ${account.sortCode} · ${account.accountNumberMasked}`}
+        subtitle={`${account.name} · ${account.details}`}
         breadcrumbs={[
           { label: "Books", href: "/books" },
           { label: "Bank", href: "/books/bank" },
@@ -137,6 +137,13 @@ export function ReconcileClient({ account, view, accounts, recent, canReconcile 
       />
 
       <main className="flex-1 overflow-auto p-6 space-y-5">
+        {account.kind === "CREDIT_CARD" && (
+          <p className="text-sm text-muted-foreground">
+            On a card, money out is a purchase: post it to the cost it is, or mark it as the payment of a
+            supplier&apos;s bill. Money in is a refund or the repayment from the bank — a repayment already posted
+            from the bank statement is offered as a match, so it is counted once.
+          </p>
+        )}
         <p className="text-sm text-muted-foreground">
           {view.lines.length === 0
             ? "Every statement line is reconciled."

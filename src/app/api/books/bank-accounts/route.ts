@@ -20,7 +20,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
   return NextResponse.json(accounts.map((a, i) => serializeBankAccount(a, positions[i])));
 });
 
-/** Setting up a bank account ties it to a ledger account: an Admin's call. */
+/** Setting up a bank account or a company credit card ties it to a ledger account: an Admin's call. */
 export const POST = withErrorHandler(async (req: NextRequest) => {
   const guard = await requireBooks(req, "books:settings", { stepUp: true });
   if (!guard.ok) return guard.response;
@@ -30,12 +30,15 @@ export const POST = withErrorHandler(async (req: NextRequest) => {
 
   try {
     const account = await prisma.$transaction((tx) => createBankAccount(tx, validation.data, guard.ctx.actor));
-    alertInBackground({
-      event: "bank.details_changed",
-      summary: `A bank account was added: ${account.name}`,
-      actor: actorLabel(guard.ctx.actor),
-      ipAddress: guard.ctx.ipAddress,
-    });
+    // A card is not somewhere customers are asked to pay, so it is not a change of bank details.
+    if (account.kind === "BANK") {
+      alertInBackground({
+        event: "bank.details_changed",
+        summary: `A bank account was added: ${account.name}`,
+        actor: actorLabel(guard.ctx.actor),
+        ipAddress: guard.ctx.ipAddress,
+      });
+    }
     return NextResponse.json({ id: account.id }, { status: 201 });
   } catch (error) {
     return booksError(error);

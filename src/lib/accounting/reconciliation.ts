@@ -22,8 +22,12 @@ import { settledByInvoice } from "./settlement";
 import { recordSupplierPayment, settledByBill } from "./supplier-payments";
 
 /**
- * The only code that reconciles: links bank statement lines to the posted
- * journal lines on that bank's ledger account that are the same money. A
+ * The only code that reconciles: links bank (or company credit card)
+ * statement lines to the posted journal lines on that account's ledger
+ * account that are the same money. A card works as a bank account does, with
+ * two differences: no customer receipts, and its ledger account is a 20xx
+ * liability — a purchase credits it, a repayment from the bank debits it, and
+ * that repayment is one journal that both statements match. A
  * reconciliation changes nothing in the ledger — but matching a line to an
  * open invoice (or money out to an open bill) records the payment first, and
  * "create" posts the journal the line needs, so those go through the posting
@@ -167,10 +171,14 @@ export async function reconcileView(db: Reader, bankAccountId: string): Promise<
       orderBy: [{ date: "asc" }, { sequence: "asc" }],
     }),
     unreconciledBookLines(db, account.ledgerAccountId),
-    db.invoice.findMany({
-      where: { status: { in: ["APPROVED", "SENT", "PART_PAID"] }, number: { not: null } },
-      include: { contact: { select: { name: true } } },
-    }),
+    // Customers pay into a bank account: money in on a card is a refund or a
+    // repayment, never an invoice being settled, so none are offered there.
+    account.kind === "CREDIT_CARD"
+      ? []
+      : db.invoice.findMany({
+          where: { status: { in: ["APPROVED", "SENT", "PART_PAID"] }, number: { not: null } },
+          include: { contact: { select: { name: true } } },
+        }),
     db.bill.findMany({
       where: { status: { in: ["APPROVED", "PART_PAID"] } },
       include: { contact: { select: { name: true } } },
@@ -377,6 +385,13 @@ export async function reconcileWithReceipt(
   const line = await tx.statementLine.findUnique({ where: { id: input.statementLineId } });
   if (!line || line.bankAccountId !== account.id) throw new AccountingError("NOT_FOUND", "Statement line not found", 404);
   if (line.reconciledAt) throw new AccountingError("ALREADY_RECONCILED", "That line is already reconciled", 409);
+  if (account.kind === "CREDIT_CARD") {
+    throw new AccountingError(
+      "NOT_A_BANK_ACCOUNT",
+      "A customer's payment arrives in a bank account, not on a credit card. Use Receive money for a refund or a repayment on the card",
+      422
+    );
+  }
   const amount = toPence(line.amount);
   if (amount <= 0) throw new AccountingError("NOT_MONEY_IN", "Only money in can pay an invoice", 422);
 

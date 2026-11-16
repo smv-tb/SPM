@@ -9,7 +9,7 @@ import { allocatedByCreditNote } from "./credit-notes";
 import { calendarDateKey, toLedgerDate } from "./dates";
 import { AccountingError } from "./errors";
 import { accountIdForCode, userId } from "./invoices";
-import { assertAllocationDate, isBankAccountCode, receiptPostingLines, refundPostingLines } from "./payment";
+import { assertAllocationDate, isBankAccountCode, isCardAccountCode, receiptPostingLines, refundPostingLines } from "./payment";
 import { postNewJournal, reverseJournal } from "./posting";
 import { lockInvoice, refreshInvoiceStatus, releaseAllocations, settledByInvoice } from "./settlement";
 
@@ -71,16 +71,24 @@ async function loadCustomer(tx: Tx, contactId: string) {
   return contact;
 }
 
-/** The account money moved through: the one asked for, or 1200. */
-export async function resolveBankAccount(tx: Tx, bankAccountId?: string | null) {
+/**
+ * The account money moved through: the one asked for, or 1200. Customers'
+ * money moves through a bank account; a supplier may also be paid by company
+ * credit card (`allowCard`), which credits the card's 20xx account instead.
+ */
+export async function resolveBankAccount(tx: Tx, bankAccountId?: string | null, options: { allowCard?: boolean } = {}) {
   const account = bankAccountId
     ? await tx.ledgerAccount.findUnique({ where: { id: bankAccountId } })
     : await tx.ledgerAccount.findUnique({ where: { code: SYSTEM_ACCOUNT_CODES.BANK } });
   if (!account) throw new AccountingError("UNKNOWN_ACCOUNT", "That bank account does not exist", 422);
-  if (account.type !== "ASSET" || !isBankAccountCode(account.code)) {
+  const isBank = account.type === "ASSET" && isBankAccountCode(account.code);
+  const isCard = account.type === "LIABILITY" && isCardAccountCode(account.code);
+  if (!isBank && !(options.allowCard && isCard)) {
     throw new AccountingError(
       "NOT_A_BANK_ACCOUNT",
-      `${account.code} ${account.name} is not a bank account (12xx)`,
+      options.allowCard
+        ? `${account.code} ${account.name} is not a bank account (12xx) or a credit card (20xx)`
+        : `${account.code} ${account.name} is not a bank account (12xx)`,
       422
     );
   }

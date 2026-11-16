@@ -143,7 +143,8 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
   // can see the books; everyone else gets null and the tile says why.
   let bank: { balance: number; asOf: string | null; accounts: number; fromStatement: boolean } | null = null;
   if (hasPermission(session, "books:view")) {
-    const accounts = await prisma.bankAccount.findMany({ where: { isArchived: false } });
+    // Bank accounts only: what is owed on a company credit card is not money in the bank.
+    const accounts = await prisma.bankAccount.findMany({ where: { isArchived: false, kind: "BANK" } });
     if (accounts.length > 0) {
       const positions = await Promise.all(accounts.map((a) => bankPosition(prisma, a)));
       const pence = positions.reduce((s, p) => s + (p.statementBalance ?? p.booksBalance), 0);
