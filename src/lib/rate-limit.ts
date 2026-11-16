@@ -1,6 +1,16 @@
 /**
  * Fixed-window, in-memory rate limiter (per process). Pure apart from the
  * clock, which callers can pass in for tests.
+ *
+ * Constraint (pentest F-08): the API rate limits (web UI and /api/hermes) are
+ * per process and in memory, so they are correct only for a single instance.
+ * Each process counts on its own and a restart resets every window. Replace
+ * this with a shared store (the database, like the login throttle's
+ * `rate_limits` table, or Redis) when either trigger applies:
+ *   - any deployment with more than one app container behind a load balancer
+ *     (N containers = N times the limit), or
+ *   - any limit that must survive a restart (restart-sensitive).
+ * Sign-in throttling is not affected: it already lives in `rate_limits`.
  */
 export interface RateLimitDecision {
   limited: boolean;
